@@ -69,25 +69,43 @@ same w ciągu minuty.
 Arkusz trzyma dokładnie to samo, co aplikacja: wszystkie kartki, wszystkie
 kafelki, kwoty, terminy, transze, budżet i kolejność.
 
-**Kierunek zapisu jest celowo niesymetryczny:**
+Synchronizacja działa w obie strony i **nikt niczego nie konfiguruje na telefonie**:
 
-- aplikacja → arkusz: automatycznie, 3 sekundy po ostatniej zmianie, a także
-  przy chowaniu aplikacji i po odzyskaniu internetu,
-- arkusz → aplikacja: **wyłącznie po naciśnięciu „Pobierz z arkusza"**
-  i potwierdzeniu. Nigdy samo z siebie, bo to podmienia całą zawartość telefonu.
+- aplikacja → arkusz: 3 sekundy po ostatniej zmianie, a także przy chowaniu
+  aplikacji i po odzyskaniu internetu,
+- arkusz → aplikacja: co 12 sekund telefon pyta arkusz, czy coś się zmieniło,
+  i pobiera całość dopiero wtedy, gdy tak. Zmiana zrobiona na jednym telefonie
+  pojawia się na drugim po kilkunastu sekundach.
 
-### Pierwsze połączenie na każdym telefonie
+Pobieranie jest wstrzymywane, gdy: coś czeka na wysłanie, kursor stoi w polu
+tekstowym, albo od własnej zmiany nie minęło 6 sekund. Dzięki temu cudze dane
+nie wyrywają tekstu spod palców.
 
-Po naciśnięciu „Połącz" aplikacja **tylko zagląda** do arkusza i pyta, w którą
-stronę mają pójść dane. Nic nie wysyła sama — drugi telefon nadpisałby wtedy
-pracę pierwszego, zanim zdążyłby ją pobrać.
+**Ograniczenie:** synchronizowana jest cała zawartość naraz, nie pojedyncze
+pola. Jeśli obie osoby zmienią coś w tym samym kilkunastosekundowym oknie,
+zostanie wersja tej, która zapisała później.
 
-- telefon, na którym są dane → **Wyślij moje dane**
-- drugi telefon → **Pobierz z arkusza**
+### Konfiguracja (raz, przez osobę wdrażającą)
 
-Wysyłanie na niepusty arkusz dodatkowo pyta o potwierdzenie.
+Adres skryptu i hasło podaje się jako zmienne środowiskowe przy budowaniu —
+patrz [.env.example](.env.example). Lokalnie kopiujesz je do `.env`, a na
+Vercelu wpisujesz w **Settings → Environment Variables**:
 
-### Instalacja (raz)
+```
+VITE_SHEETS_URL    = https://script.google.com/macros/s/…/exec
+VITE_SHEETS_TOKEN  = hasło z linii 18 w Kod.gs
+```
+
+Do repozytorium te wartości nie trafiają (`.env` jest ignorowany) — repo jest
+publiczne, więc hasło w kodzie dałoby każdemu pełny dostęp do arkusza. W samym
+zbudowanym pliku aplikacji oczywiście są, więc chroni je tylko to, że nikt obcy
+nie zna adresu aplikacji.
+
+Karta „Google Sheets" w podsumowaniu pokazuje wtedy tylko stan i dwa przyciski
+do wymuszenia synchronizacji od ręki. Ręczne wpisywanie adresu jest zapasowym
+wyjściem, gdy zmiennych nie ustawiono.
+
+### Instalacja arkusza (raz)
 
 1. Nowy arkusz na `sheets.new`.
 2. Rozszerzenia → Apps Script, wklej [`apps-script/Kod.gs`](apps-script/Kod.gs).

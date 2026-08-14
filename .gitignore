@@ -6,6 +6,9 @@ dev-dist
 .DS_Store
 *.local
 *.log
+.env
+.env.*
+!.env.example
 .idea
 .vscode
 .claude/settings.local.json

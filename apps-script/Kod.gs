@@ -40,6 +40,9 @@ function doPost(e) {
     const body = JSON.parse(e.postData.contents)
     if (body.token !== TOKEN) return odpowiedz({ error: 'Zły token' })
 
+    // 'stamp' to tani odczyt samego znacznika czasu — telefony pytają o niego
+    // co kilkanaście sekund i pobierają całość dopiero, gdy coś się zmieniło
+    if (body.action === 'stamp') return odpowiedz({ updatedAt: znacznik() })
     if (body.action === 'read') return odpowiedz(czytaj())
     if (body.action === 'write') return odpowiedz(zapisz(body))
     return odpowiedz({ error: 'Nieznana akcja: ' + body.action })
@@ -57,6 +60,11 @@ function onEdit(e) {
   const arkusz = e.range.getSheet()
   if (arkusz.getName() !== ARKUSZ_DANE) return
   zapiszUstawienie(e.source, 'Zmieniono', new Date().toISOString())
+}
+
+function znacznik() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet()
+  return czytajUstawienia(ss, ss.getSpreadsheetTimeZone())['Zmieniono'] || ''
 }
 
 function czytaj() {

@@ -16,7 +16,7 @@ const canConnect = computed(() => urlInput.value.trim().length > 20 && tokenInpu
  * Zaraz po połączeniu nie wysyłamy nic sami — drugi telefon nadpisałby wtedy
  * pracę pierwszego, zanim zdążyłby ją pobrać. Kierunek wybiera użytkownik.
  */
-const firstRun = computed(() => sync.connected && !sync.lastPushAt && !sync.lastPullAt)
+const firstRun = computed(() => sync.connected && !sync.auto && !sync.lastPushAt && !sync.lastPullAt)
 
 const statusText = computed(() => {
   if (sync.busy === 'push') return 'Wysyłam…'
@@ -25,9 +25,9 @@ const statusText = computed(() => {
   if (sync.error) return 'Coś nie zadziałało'
   if (firstRun.value) return 'Połączono — wybierz kierunek'
   if (sync.pending) return 'Czeka na wysłanie'
-  if (sync.lastPushAt) return `Wysłano ${czas(sync.lastPushAt)}`
-  if (sync.lastPullAt) return `Pobrano ${czas(sync.lastPullAt)}`
-  return 'Połączono'
+  const ostatnie = [sync.lastPushAt, sync.lastPullAt].filter(Boolean).sort().pop()
+  if (ostatnie) return `Zsynchronizowano ${czas(ostatnie)}`
+  return sync.auto ? 'Synchronizacja włączona' : 'Połączono'
 })
 
 function czas(iso) {
@@ -169,7 +169,12 @@ function flash(text) {
         </div>
       </Transition>
 
-      <button class="sync__off" type="button" @click="onDisconnect">Rozłącz arkusz</button>
+      <p v-if="sync.auto" class="sync__auto">
+        Zmiany zapisują się do arkusza same, a zmiany drugiej osoby pojawiają się tu w kilkanaście sekund.
+        Przyciski powyżej są tylko na wypadek, gdybyś chciał to wymusić od razu.
+      </p>
+
+      <button v-if="!sync.auto" class="sync__off" type="button" @click="onDisconnect">Rozłącz arkusz</button>
     </template>
 
     <Transition name="fade">
@@ -299,6 +304,13 @@ function flash(text) {
 
 .sync__confirm-row .btn {
   flex: 1;
+}
+
+.sync__auto {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-faint);
 }
 
 .sync__off {

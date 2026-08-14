@@ -198,8 +198,12 @@ export const state = reactive({
   vendors: initial.vendors,
   budget: initial.budget,
   index: Math.min(Math.max(0, initial.index), Math.max(0, initial.vendors.length - 1)),
-  /** Kiedy ostatnio zmieniły się dane (nie licząc przewracania kartek). */
-  updatedAt: initial.updatedAt || new Date().toISOString(),
+  /**
+   * Kiedy ostatnio zmieniły się dane (nie licząc przewracania kartek).
+   * Świeża instalacja zaczyna pusto, żeby przy synchronizacji nie wyglądała na
+   * nowszą od arkusza i nie nadpisała go pustymi kartkami.
+   */
+  updatedAt: initial.updatedAt || '',
 })
 
 let saveTimer = null
