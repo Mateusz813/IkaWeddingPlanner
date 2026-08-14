@@ -81,9 +81,22 @@ Pobieranie jest wstrzymywane, gdy: coś czeka na wysłanie, kursor stoi w polu
 tekstowym, albo od własnej zmiany nie minęło 6 sekund. Dzięki temu cudze dane
 nie wyrywają tekstu spod palców.
 
-**Ograniczenie:** synchronizowana jest cała zawartość naraz, nie pojedyncze
-pola. Jeśli obie osoby zmienią coś w tym samym kilkunastosekundowym oknie,
-zostanie wersja tej, która zapisała później.
+Scalanie idzie **pole po polu**, nie hurtem. Każdy kafelek i każda kartka niosą
+własny znacznik zmiany (`at`); przy spotkaniu dwóch wersji wygrywa nowsza. Dzięki
+temu zmiana nazwy u jednej osoby nie kasuje kwoty wpisanej w tej samej chwili
+przez drugą. Zapis do arkusza to odczyt → scalenie → zapis, więc wysyłka nigdy
+nie zdmuchuje świeższych cudzych zmian.
+
+Kasowanie zapisujemy osobno w arkuszu `Usuniete` (id → kiedy). Bez tego skasowany
+kafelek wracałby z kopii drugiego telefonu.
+
+Telefon, który jeszcze niczego nie zmieniał (nowy albo po reinstalacji), bierze
+arkusz w całości zamiast scalać — inaczej jego puste kartki startowe podwoiłyby
+zawartość.
+
+**Co zostaje niescalone:** kolejność kafelków i kartek (trzymana jest lokalna,
+cudze nowości lądują na końcu) oraz sytuacja, gdy obie osoby zmienią *to samo
+pole* w tej samej chwili — wtedy zostaje wersja zapisana później.
 
 ### Konfiguracja (raz, przez osobę wdrażającą)
 

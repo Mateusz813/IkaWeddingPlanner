@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import { FIELD_DEFS, applyRemote, blockMeta, onDataChange, snapshot, state } from './store.js'
+import { FIELD_DEFS, blockMeta, mergeRemote, onDataChange, snapshot, state } from './store.js'
 import { coerceISO } from './dates.js'
 
 const CONFIG_KEY = 'ika-wedding-planner/sync'
@@ -120,6 +120,8 @@ export function toRows(vendors) {
         block.key ? '' : block.type || 'text',
         String(vi + 1),
         String(bi + 1),
+        block.at || '',
+        vendor.at || '',
       ])
     })
   })
@@ -132,9 +134,8 @@ export function fromRows(rows) {
   const vendors = new Map()
 
   rows.forEach((row, i) => {
-    const [title, label, value, due, paid, vendorId, blockId, key, type, vOrder, bOrder] = row.map((c) =>
-      c === null || c === undefined ? '' : String(c),
-    )
+    const [title, label, value, due, paid, vendorId, blockId, key, type, vOrder, bOrder, blockAt, vendorAt] =
+      row.map((c) => (c === null || c === undefined ? '' : String(c)))
     if (!title && !label && !value) return
 
     const vKey = vendorId || `tytuł:${title}`
@@ -142,6 +143,7 @@ export function fromRows(rows) {
       vendors.set(vKey, {
         id: vendorId || undefined,
         title: title || 'Nowa kartka',
+        at: vendorAt || '',
         order: Number(vOrder) || 9999,
         blocks: [],
       })
@@ -151,8 +153,8 @@ export function fromRows(rows) {
 
     const known = key && FIELD_DEFS[key]
     const block = known
-      ? { id: blockId || undefined, key, value }
-      : { id: blockId || undefined, key: null, type: type || 'text', label: label || 'Pole', value }
+      ? { id: blockId || undefined, key, value, at: blockAt || '' }
+      : { id: blockId || undefined, key: null, type: type || 'text', label: label || 'Pole', value, at: blockAt || '' }
 
     if (block.type === 'installment') {
       block.due = coerceISO(due)
@@ -164,7 +166,7 @@ export function fromRows(rows) {
 
   return [...vendors.values()]
     .sort((a, b) => a.order - b.order)
-    .map((v) => ({ id: v.id, title: v.title, blocks: v.blocks.sort((a, b) => a.order - b.order) }))
+    .map((v) => ({ id: v.id, title: v.title, at: v.at, blocks: v.blocks.sort((a, b) => a.order - b.order) }))
 }
 
 /* ---------------- operacje ---------------- */
@@ -192,20 +194,34 @@ export function disconnect() {
   writeConfig()
 }
 
-/** Wysyła wszystko do arkusza. Nadpisuje arkusz stanem z telefonu. */
+/**
+ * Zapis do arkusza: najpierw wciągamy to, co zdążyła zmienić druga osoba,
+ * scalamy pole po polu, dopiero potem zapisujemy wynik. Bez tego kroku zapis
+ * z jednego telefonu kasowałby świeże zmiany z drugiego.
+ */
 export async function push({ silent = false } = {}) {
   if (!sync.connected || sync.busy) return
   sync.busy = 'push'
   if (!silent) sync.error = ''
   try {
+    const remote = await call({ action: 'read' })
+    mergeRemote({
+      vendors: fromRows(Array.isArray(remote.rows) ? remote.rows : []),
+      budget: typeof remote.budget === 'string' ? remote.budget : undefined,
+      deleted: remote.deleted,
+    })
+
+    const stamp = new Date().toISOString()
     const snap = snapshot()
     await call({
       action: 'write',
       rows: toRows(snap.vendors),
+      deleted: snap.deleted,
       budget: snap.budget,
-      updatedAt: snap.updatedAt,
+      updatedAt: stamp,
     })
-    knownRemoteStamp = snap.updatedAt
+    state.updatedAt = stamp
+    knownRemoteStamp = stamp
     sync.lastPushAt = new Date().toISOString()
     sync.pending = false
     sync.error = ''
@@ -218,7 +234,7 @@ export async function push({ silent = false } = {}) {
   }
 }
 
-/** Pobiera arkusz i podmienia nim dane w telefonie. */
+/** Wciąga zmiany z arkusza i scala je z tym, co jest w telefonie. */
 export async function pull({ silent = false } = {}) {
   if (!sync.connected || sync.busy) return null
   sync.busy = 'pull'
@@ -226,11 +242,11 @@ export async function pull({ silent = false } = {}) {
   try {
     const data = await call({ action: 'read' })
     const vendors = fromRows(Array.isArray(data.rows) ? data.rows : [])
-    if (!vendors.length) throw new Error('Arkusz jest pusty — nie ma czego pobrać')
-    applyRemote({
+    mergeRemote({
       vendors,
       budget: typeof data.budget === 'string' ? data.budget : undefined,
       updatedAt: data.updatedAt,
+      deleted: data.deleted,
     })
     knownRemoteStamp = data.updatedAt || ''
     sync.lastPullAt = new Date().toISOString()

@@ -1,5 +1,6 @@
 import { nextTick, reactive, watch } from 'vue'
 import { parseMoney } from './money.js'
+import { mergeTombstones, mergeVendors, pruneTombstones } from './merge.js'
 
 const STORAGE_KEY = 'ika-wedding-planner/v1'
 
@@ -81,6 +82,11 @@ const SEED_TITLES = [
   'Podróż poślubna',
 ]
 
+/** Znacznik zmiany — po nim scalanie wie, czyja wersja jest nowsza. */
+function teraz() {
+  return new Date().toISOString()
+}
+
 function uid(prefix = 'id') {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
 }
@@ -103,16 +109,34 @@ export function blockMeta(block) {
   }
 }
 
-function fixedBlock(key, value = '') {
-  return { id: uid('b'), key, value: key === 'status' ? value || STATUS_OPTIONS[0] : value }
+function fixedBlock(key, value = '', at = '') {
+  return { id: uid('b'), key, value: key === 'status' ? value || STATUS_OPTIONS[0] : value, at }
 }
 
-export function createVendor(title = 'Nowy usługodawca') {
-  return { id: uid('v'), title, blocks: DEFAULT_KEYS.map((k) => fixedBlock(k)) }
+export function createVendor(title = 'Nowy usługodawca', at = '') {
+  return { id: uid('v'), title, at, blocks: DEFAULT_KEYS.map((k) => fixedBlock(k, '', at)) }
+}
+
+/** Identyfikator wyprowadzony z nazwy — te same dla każdej świeżej instalacji. */
+function slug(text) {
+  return String(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
 }
 
 function seed() {
-  return SEED_TITLES.map((t) => createVendor(t))
+  return SEED_TITLES.map((title) => ({
+    id: `v_seed_${slug(title)}`,
+    title,
+    at: '',
+    blocks: DEFAULT_KEYS.map((key) => ({
+      id: `b_seed_${slug(title)}_${key}`,
+      key,
+      value: key === 'status' ? STATUS_OPTIONS[0] : '',
+      at: '',
+    })),
+  }))
 }
 
 /* ---------------- wczytywanie i migracja ---------------- */
@@ -120,8 +144,10 @@ function seed() {
 function normalizeBlock(raw) {
   if (!raw || typeof raw !== 'object') return null
 
+  const at = typeof raw.at === 'string' ? raw.at : ''
+
   if (raw.key && FIELD_DEFS[raw.key]) {
-    return { id: raw.id || uid('b'), key: raw.key, value: String(raw.value ?? '') }
+    return { id: raw.id || uid('b'), key: raw.key, value: String(raw.value ?? ''), at }
   }
 
   const type = EXTRA_FIELD_TYPES.some((t) => t.type === raw.type) ? raw.type : 'text'
@@ -131,6 +157,7 @@ function normalizeBlock(raw) {
     type,
     label: String(raw.label ?? 'Pole'),
     value: String(raw.value ?? ''),
+    at,
   }
   if (type === 'installment') {
     block.due = String(raw.due ?? '')
@@ -152,7 +179,12 @@ function migrateFromValues(raw) {
 }
 
 function normalizeVendor(raw) {
-  const vendor = { id: raw?.id || uid('v'), title: String(raw?.title ?? 'Nowy usługodawca'), blocks: [] }
+  const vendor = {
+    id: raw?.id || uid('v'),
+    title: String(raw?.title ?? 'Nowy usługodawca'),
+    at: typeof raw?.at === 'string' ? raw.at : '',
+    blocks: [],
+  }
   const blocks = Array.isArray(raw?.blocks)
     ? raw.blocks.map(normalizeBlock).filter(Boolean)
     : migrateFromValues(raw)
@@ -177,7 +209,7 @@ function normalizeVendor(raw) {
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { vendors: seed(), budget: '', index: 0 }
+    if (!raw) return { vendors: seed(), budget: '', index: 0, updatedAt: '', deleted: {} }
     const data = JSON.parse(raw)
     const vendors = Array.isArray(data?.vendors) ? data.vendors.map(normalizeVendor) : seed()
     return {
@@ -185,10 +217,11 @@ function load() {
       budget: typeof data?.budget === 'string' ? data.budget : '',
       index: Number.isInteger(data?.index) ? data.index : 0,
       updatedAt: typeof data?.updatedAt === 'string' ? data.updatedAt : '',
+      deleted: data?.deleted && typeof data.deleted === 'object' ? data.deleted : {},
     }
   } catch (err) {
     console.warn('[planer] nie udało się wczytać danych, startuję od nowa', err)
-    return { vendors: seed(), budget: '', index: 0, updatedAt: '' }
+    return { vendors: seed(), budget: '', index: 0, updatedAt: '', deleted: {} }
   }
 }
 
@@ -204,6 +237,8 @@ export const state = reactive({
    * nowszą od arkusza i nie nadpisała go pustymi kartkami.
    */
   updatedAt: initial.updatedAt || '',
+  /** Skasowane kartki i kafelki: id → kiedy. Bez tego wracałyby przy scalaniu. */
+  deleted: pruneTombstones(initial.deleted || {}),
 })
 
 let saveTimer = null
@@ -217,6 +252,7 @@ function persist() {
         budget: state.budget,
         index: state.index,
         updatedAt: state.updatedAt,
+        deleted: state.deleted,
       }),
     )
   } catch (err) {
@@ -255,21 +291,47 @@ watch(
 watch(() => state.index, schedulePersist)
 
 export function snapshot() {
-  return { vendors: state.vendors, budget: state.budget, updatedAt: state.updatedAt }
+  return {
+    vendors: state.vendors,
+    budget: state.budget,
+    updatedAt: state.updatedAt,
+    deleted: state.deleted,
+  }
 }
 
 /**
- * Podmienia całą zawartość danymi z arkusza. Wołane WYŁĄCZNIE z przycisku
- * „Pobierz z arkusza" — nigdy automatycznie, żeby nie nadpisać czyjejś pracy.
+ * Wciąga zmiany z arkusza, scalając je z tym, co jest w telefonie — pole po
+ * polu, wygrywa nowszy znacznik. Nic nie jest nadpisywane hurtem.
+ * Zwraca true, jeśli cokolwiek się zmieniło.
  */
-export function applyRemote({ vendors, budget, updatedAt }) {
+export function mergeRemote({ vendors, budget, updatedAt, deleted }) {
+  const tombstones = pruneTombstones(mergeTombstones(state.deleted, deleted || {}))
+  const remote = (Array.isArray(vendors) ? vendors : []).map(normalizeVendor)
+
+  // Telefon, który jeszcze niczego nie zmieniał, ma tylko puste kartki startowe.
+  // Scalanie dołożyłoby je do zawartości arkusza — zamiast tego bierzemy arkusz
+  // w całości. Dotyczy nowego telefonu i ponownej instalacji.
+  const nicNieZmieniano = !state.updatedAt
+  const scalone = nicNieZmieniano && remote.length ? remote : mergeVendors(state.vendors, remote, tombstones)
+
+  const przed = JSON.stringify(state.vendors)
+  const po = JSON.stringify(scalone)
+  const budzetSieZmienil = typeof budget === 'string' && budget !== state.budget && !state.budget
+
+  if (przed === po && !budzetSieZmienil) {
+    state.deleted = tombstones
+    if (updatedAt) state.updatedAt = updatedAt
+    return false
+  }
+
   applyingRemote = true
   const currentId = state.vendors[state.index]?.id
 
-  state.vendors = (Array.isArray(vendors) ? vendors : []).map(normalizeVendor)
-  if (!state.vendors.length) state.vendors = seed()
-  if (typeof budget === 'string') state.budget = budget
-  state.updatedAt = updatedAt || new Date().toISOString()
+  state.deleted = tombstones
+  state.vendors = scalone.length ? scalone : state.vendors
+  // budżet bierzemy z arkusza tylko wtedy, gdy lokalnie go nie ma
+  if (budzetSieZmienil) state.budget = budget
+  if (updatedAt) state.updatedAt = updatedAt
 
   const at = state.vendors.findIndex((v) => v.id === currentId)
   setIndex(at >= 0 ? at : state.index)
@@ -278,17 +340,7 @@ export function applyRemote({ vendors, budget, updatedAt }) {
     applyingRemote = false
     schedulePersist()
   })
-}
-
-if (typeof window !== 'undefined') {
-  const flush = () => {
-    clearTimeout(saveTimer)
-    persist()
-  }
-  window.addEventListener('pagehide', flush)
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) flush()
-  })
+  return true
 }
 
 /* ---------------- odczyt ---------------- */
@@ -320,7 +372,9 @@ export function setIndex(i) {
 
 export function setTitle(vendorId, title) {
   const v = findVendor(vendorId)
-  if (v) v.title = title
+  if (!v) return
+  v.title = title
+  v.at = teraz()
 }
 
 function findBlock(vendorId, blockId) {
@@ -329,22 +383,30 @@ function findBlock(vendorId, blockId) {
 
 export function setBlockValue(vendorId, blockId, value) {
   const b = findBlock(vendorId, blockId)
-  if (b) b.value = value
+  if (!b) return
+  b.value = value
+  b.at = teraz()
 }
 
 export function setBlockLabel(vendorId, blockId, label) {
   const b = findBlock(vendorId, blockId)
-  if (b) b.label = label
+  if (!b) return
+  b.label = label
+  b.at = teraz()
 }
 
 export function setBlockDue(vendorId, blockId, due) {
   const b = findBlock(vendorId, blockId)
-  if (b) b.due = due
+  if (!b) return
+  b.due = due
+  b.at = teraz()
 }
 
 export function setBlockPaid(vendorId, blockId, paid) {
   const b = findBlock(vendorId, blockId)
-  if (b) b.paid = !!paid
+  if (!b) return
+  b.paid = !!paid
+  b.at = teraz()
 }
 
 const NOWE_POLE_NAZWY = {
@@ -362,12 +424,12 @@ export function addBlock(vendorId, type = 'text') {
 
   if (type === 'installment') {
     const nr = installments(v).length + 1
-    const block = { id: uid('b'), key: null, type: 'installment', label: `${nr}. transza`, value: '', due: '', paid: false }
+    const block = { id: uid('b'), key: null, type: 'installment', label: `${nr}. transza`, value: '', due: '', paid: false, at: teraz() }
     v.blocks.push(block)
     return block
   }
 
-  const block = { id: uid('b'), key: null, type, label: NOWE_POLE_NAZWY[type] || 'Nowe pole', value: '' }
+  const block = { id: uid('b'), key: null, type, label: NOWE_POLE_NAZWY[type] || 'Nowe pole', value: '', at: teraz() }
   v.blocks.push(block)
   return block
 }
@@ -376,7 +438,7 @@ export function addBlock(vendorId, type = 'text') {
 export function restoreKey(vendorId, key) {
   const v = findVendor(vendorId)
   if (!v || !FIELD_DEFS[key] || v.blocks.some((b) => b.key === key)) return null
-  const block = fixedBlock(key)
+  const block = fixedBlock(key, '', teraz())
   v.blocks.push(block)
   return block
 }
@@ -385,6 +447,7 @@ export function removeBlock(vendorId, blockId) {
   const v = findVendor(vendorId)
   if (!v) return
   v.blocks = v.blocks.filter((b) => b.id !== blockId)
+  state.deleted[blockId] = teraz()
 }
 
 /**
@@ -404,7 +467,7 @@ export function moveBlock(vendorId, from, to) {
  * Nie zmienia state.index — dzięki temu widok książki może tam „przewrócić kartkę".
  */
 export function addVendor(title = 'Nowy usługodawca', after = state.index) {
-  const v = createVendor(title)
+  const v = createVendor(title, teraz())
   const pos = Math.min(Math.max(0, after + 1), state.vendors.length)
   state.vendors.splice(pos, 0, v)
   return pos
@@ -413,6 +476,11 @@ export function addVendor(title = 'Nowy usługodawca', after = state.index) {
 export function removeVendor(vendorId) {
   const i = state.vendors.findIndex((x) => x.id === vendorId)
   if (i === -1) return
+  // kartkę i jej kafelki trzeba zapamiętać jako skasowane, inaczej wrócą
+  // przy scalaniu z kopią z drugiego telefonu
+  const znacznik = teraz()
+  state.deleted[vendorId] = znacznik
+  for (const block of state.vendors[i].blocks) state.deleted[block.id] = znacznik
   state.vendors.splice(i, 1)
   if (!state.vendors.length) state.vendors.push(createVendor('Nowy usługodawca'))
   setIndex(Math.min(i, state.vendors.length - 1))

@@ -134,6 +134,19 @@ function flash(text) {
         </div>
       </div>
 
+      <!-- Przy konfiguracji z Vercela nie ma czego klikać: wysyłka i pobieranie
+           dzieją się same. Przycisk pokazujemy tylko, gdy coś nie zadziałało. -->
+      <button
+        v-else-if="sync.auto"
+        v-show="sync.error || sync.pending"
+        class="btn btn--ghost sync__retry"
+        type="button"
+        :disabled="!!sync.busy"
+        @click="onPush"
+      >
+        Spróbuj wysłać ponownie
+      </button>
+
       <div v-else class="card__actions">
         <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="onPush">Wyślij teraz</button>
         <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="askPull">
@@ -171,7 +184,7 @@ function flash(text) {
 
       <p v-if="sync.auto" class="sync__auto">
         Zmiany zapisują się do arkusza same, a zmiany drugiej osoby pojawiają się tu w kilkanaście sekund.
-        Przyciski powyżej są tylko na wypadek, gdybyś chciał to wymusić od razu.
+        Nie trzeba nic klikać.
       </p>
 
       <button v-if="!sync.auto" class="sync__off" type="button" @click="onDisconnect">Rozłącz arkusz</button>
@@ -304,6 +317,11 @@ function flash(text) {
 
 .sync__confirm-row .btn {
   flex: 1;
+}
+
+.sync__retry {
+  width: 100%;
+  margin-top: 12px;
 }
 
 .sync__auto {

@@ -19,6 +19,7 @@ const TOKEN = 'zmien-to-na-wlasne-dlugie-haslo'
 
 const ARKUSZ_DANE = 'Kartki'
 const ARKUSZ_USTAWIENIA = 'Ustawienia'
+const ARKUSZ_USUNIETE = 'Usuniete'
 
 const NAGLOWKI = [
   'Kartka',
@@ -32,6 +33,8 @@ const NAGLOWKI = [
   'typ',
   'nr kartki',
   'nr pola',
+  'zmieniono',
+  'kartka zmieniono',
 ]
 
 /** Aplikacja rozmawia ze skryptem wyłącznie przez POST — token nie ląduje w adresie. */
@@ -92,7 +95,12 @@ function czytaj() {
   }
 
   const ustawienia = czytajUstawienia(ss, strefa)
-  return { rows: wiersze, budget: ustawienia['Budżet'] || '', updatedAt: ustawienia['Zmieniono'] || '' }
+  return {
+    rows: wiersze,
+    deleted: czytajUsuniete(ss, strefa),
+    budget: ustawienia['Budżet'] || '',
+    updatedAt: ustawienia['Zmieniono'] || '',
+  }
 }
 
 function zapisz(body) {
@@ -113,6 +121,7 @@ function zapisz(body) {
     arkusz.setFrozenRows(1)
     arkusz.autoResizeColumns(1, 5)
 
+    zapiszUsuniete(ss, body.deleted || {})
     zapiszUstawienie(ss, 'Budżet', body.budget || '')
     zapiszUstawienie(ss, 'Zmieniono', body.updatedAt || new Date().toISOString())
 
@@ -120,6 +129,42 @@ function zapisz(body) {
   } finally {
     lock.releaseLock()
   }
+}
+
+/** Skasowane kartki i kafelki: id → kiedy. Bez tego wracałyby przy scalaniu. */
+function czytajUsuniete(ss, strefa) {
+  const arkusz = ss.getSheetByName(ARKUSZ_USUNIETE)
+  const wynik = {}
+  if (!arkusz || arkusz.getLastRow() < 2) return wynik
+
+  arkusz
+    .getRange(2, 1, arkusz.getLastRow() - 1, 2)
+    .getValues()
+    .forEach(function (wiersz) {
+      const id = String(wiersz[0] || '').trim()
+      if (!id) return
+      const kiedy = wiersz[1]
+      wynik[id] =
+        kiedy instanceof Date
+          ? Utilities.formatDate(kiedy, strefa, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+          : String(kiedy || '')
+    })
+  return wynik
+}
+
+function zapiszUsuniete(ss, mapa) {
+  const arkusz = daj(ss, ARKUSZ_USUNIETE)
+  const wiersze = [['id', 'kiedy']]
+  Object.keys(mapa).forEach(function (id) {
+    wiersze.push([id, String(mapa[id] || '')])
+  })
+
+  arkusz.clear()
+  const zakres = arkusz.getRange(1, 1, wiersze.length, 2)
+  zakres.setNumberFormat('@')
+  zakres.setValues(wiersze)
+  arkusz.getRange(1, 1, 1, 2).setFontWeight('bold').setBackground('#FBEEEA')
+  arkusz.setFrozenRows(1)
 }
 
 function czytajUstawienia(ss, strefa) {
