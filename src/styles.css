@@ -54,6 +54,38 @@ body {
   height: 100%;
 }
 
+/* ---------- paski przewijania ---------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--blush-soft) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: var(--blush-soft);
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--blush);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 input,
 textarea,
 select,

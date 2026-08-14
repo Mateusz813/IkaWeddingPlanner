@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { moveVendor, state, vendorTotals } from '../lib/store.js'
+import { moveVendor, state, value, vendorTotals } from '../lib/store.js'
 import { formatPLN } from '../lib/money.js'
 
 const emit = defineEmits(['close', 'goto', 'add'])
@@ -22,7 +22,7 @@ const pages = computed(() =>
             <span class="idx__num">{{ p.i + 1 }}</span>
             <span class="idx__text">
               <span class="idx__name">{{ p.vendor.title || 'Bez nazwy' }}</span>
-              <span class="idx__sub">{{ p.vendor.values.name || '—' }}</span>
+              <span class="idx__sub">{{ value(p.vendor, 'name') || '—' }}</span>
             </span>
             <span class="idx__amount">{{ p.total ? formatPLN(p.total) : '' }}</span>
           </button>

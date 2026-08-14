@@ -57,10 +57,3 @@ export function formatAmount(value) {
   const n = Math.round((Number(value) || 0) * 100) / 100
   return Number.isInteger(n) ? decWhole.format(n) : decCents.format(n)
 }
-
-export function formatDate(value) {
-  if (!value) return ''
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return value
-  return d.toLocaleDateString('pl-PL', { day: '2-digit', month: 'long', year: 'numeric' })
-}

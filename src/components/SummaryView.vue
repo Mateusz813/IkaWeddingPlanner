@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { exportData, importData, state, summary, vendorTotals } from '../lib/store.js'
+import { exportData, importData, state, summary, value, vendorTotals } from '../lib/store.js'
 import { formatPLN } from '../lib/money.js'
 
 const emit = defineEmits(['close', 'goto'])
@@ -18,7 +18,7 @@ const rows = computed(() =>
 
 const paidPercent = computed(() => {
   if (!sums.value.total) return 0
-  return Math.min(100, Math.round((sums.value.deposit / sums.value.total) * 100))
+  return Math.min(100, Math.round((sums.value.paid / sums.value.total) * 100))
 })
 
 const budgetPercent = computed(() => {
@@ -76,8 +76,8 @@ function flash(text) {
 
         <div class="sum__split">
           <div class="sum__split-item">
-            <span>Wpłacone zaliczki</span>
-            <strong class="is-good">{{ formatPLN(sums.deposit) }}</strong>
+            <span>Już zapłacone</span>
+            <strong class="is-good">{{ formatPLN(sums.paid) }}</strong>
           </div>
           <div class="sum__split-sep"></div>
           <div class="sum__split-item">
@@ -135,10 +135,11 @@ function flash(text) {
               {{ row.total ? formatPLN(row.total) : '—' }}
             </span>
             <span class="row__sub">
-              {{ row.vendor.values.name || 'nie wybrano jeszcze' }}
-              <template v-if="row.deposit > 0"> · zaliczka {{ formatPLN(row.deposit) }}</template>
+              {{ value(row.vendor, 'name') || 'nie wybrano jeszcze' }}
+              <template v-if="row.paid > 0"> · zapłacone {{ formatPLN(row.paid) }}</template>
+              <template v-if="row.count"> · {{ row.count }} transz.</template>
             </span>
-            <span class="row__chip">{{ row.vendor.values.status || 'Do ustalenia' }}</span>
+            <span class="row__chip">{{ value(row.vendor, 'status') || 'Do ustalenia' }}</span>
           </button>
         </li>
       </ul>

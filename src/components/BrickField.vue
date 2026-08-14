@@ -1,27 +1,58 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import DateSheet from './DateSheet.vue'
 import { STATUS_OPTIONS } from '../lib/store.js'
 import { formatAmount, formatPLN, parseMoney } from '../lib/money.js'
+import { formatDateShort } from '../lib/dates.js'
 
 const props = defineProps({
   label: { type: String, required: true },
   type: { type: String, default: 'text' },
   modelValue: { type: String, default: '' },
+  /** tylko dla transzy */
+  due: { type: String, default: '' },
+  paid: { type: Boolean, default: false },
   icon: { type: String, default: '' },
   placeholder: { type: String, default: '' },
   span: { type: Number, default: 1 },
   editableLabel: { type: Boolean, default: false },
   removable: { type: Boolean, default: false },
+  draggable: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue', 'update:label', 'remove'])
+const emit = defineEmits(['update:modelValue', 'update:label', 'update:due', 'update:paid', 'remove', 'grip'])
 
 const textareaEl = ref(null)
 
+/** Kafelek z treścią kasujemy dopiero za drugim stuknięciem — łatwo o pomyłkę. */
+const confirmRemove = ref(false)
+let confirmTimer = null
+
+function onRemove() {
+  if (!filled.value || confirmRemove.value) {
+    clearTimeout(confirmTimer)
+    emit('remove')
+    return
+  }
+  confirmRemove.value = true
+  clearTimeout(confirmTimer)
+  confirmTimer = setTimeout(() => (confirmRemove.value = false), 3000)
+}
+
+onBeforeUnmount(() => clearTimeout(confirmTimer))
+
+/** Który termin edytujemy w kalendarzu: 'value' (pole daty) albo 'due' (transza). */
+const picker = ref(null)
+
+const pickerValue = computed(() => (picker.value === 'due' ? props.due : props.modelValue))
+const pickerTitle = computed(() => (picker.value === 'due' ? `${props.label} — termin` : props.label))
+
+function onPicked(iso) {
+  emit(picker.value === 'due' ? 'update:due' : 'update:modelValue', iso)
+}
+
 const inputType = computed(() => {
   switch (props.type) {
-    case 'date':
-      return 'date'
     case 'tel':
       return 'tel'
     case 'email':
@@ -36,6 +67,7 @@ const inputType = computed(() => {
 const inputMode = computed(() => {
   switch (props.type) {
     case 'money':
+    case 'installment':
       return 'decimal'
     case 'tel':
       return 'tel'
@@ -55,10 +87,10 @@ const filled = computed(() => String(props.modelValue || '').trim().length > 0)
  * została wpisana (np. „7.200,50" albo „12.5") — wtedy warto ją potwierdzić.
  * Spacje pomijamy, bo Intl wstawia twardą spację, a użytkownik zwykłą.
  */
-const stripSpaces = (s) => String(s).replace(/[\s  ]/g, '')
+const stripSpaces = (s) => String(s).replace(/[\s  ]/g, '')
 
 const moneyHint = computed(() => {
-  if (props.type !== 'money' || !filled.value) return ''
+  if ((props.type !== 'money' && props.type !== 'installment') || !filled.value) return ''
   const n = parseMoney(props.modelValue)
   if (n <= 0) return ''
   const same = stripSpaces(formatAmount(n)) === stripSpaces(props.modelValue)
@@ -91,16 +123,25 @@ watch(
   },
   { immediate: true },
 )
-
-function onInput(event) {
-  emit('update:modelValue', event.target.value)
-  if (props.type === 'textarea') autoGrow()
-}
 </script>
 
 <template>
-  <div class="brick" :class="[`brick--span-${span}`, { 'is-filled': filled }]">
+  <div
+    class="brick"
+    :class="[`brick--span-${span}`, { 'is-filled': filled, 'brick--inst': type === 'installment', 'is-paid': type === 'installment' && paid }]"
+  >
     <div class="brick__head">
+      <button
+        v-if="draggable"
+        class="brick__grip"
+        type="button"
+        aria-label="Przytrzymaj i przesuń kafelek"
+        @pointerdown="$emit('grip', $event)"
+        @click.prevent
+      >
+        ⠿
+      </button>
+
       <span class="brick__icon" aria-hidden="true">{{ icon }}</span>
 
       <input
@@ -127,16 +168,43 @@ function onInput(event) {
       <button
         v-if="removable"
         class="brick__action brick__action--remove"
+        :class="{ 'is-confirming': confirmRemove }"
         type="button"
-        aria-label="Usuń pole"
-        @click="$emit('remove')"
+        :aria-label="confirmRemove ? 'Potwierdź usunięcie pola' : 'Usuń pole'"
+        @click="onRemove"
       >
-        ×
+        {{ confirmRemove ? '✓' : '×' }}
       </button>
     </div>
 
+    <!-- transza: kwota + własny termin + znacznik zapłaty -->
+    <template v-if="type === 'installment'">
+      <div class="inst">
+        <div class="inst__amount">
+          <input
+            class="brick__input brick__input--money"
+            inputmode="decimal"
+            :value="modelValue"
+            placeholder="0"
+            @input="$emit('update:modelValue', $event.target.value)"
+          />
+          <span class="brick__suffix">zł</span>
+        </div>
+        <button class="inst__due" type="button" @click="picker = 'due'">
+          <span class="inst__due-label">termin</span>
+          <span class="inst__due-value" :class="{ 'is-empty': !due }">
+            {{ due ? formatDateShort(due) : 'wybierz' }}
+          </span>
+        </button>
+      </div>
+      <button class="inst__paid" type="button" @click="$emit('update:paid', !paid)">
+        <span class="inst__box">{{ paid ? '✓' : '' }}</span>
+        {{ paid ? 'Zapłacone' : 'Do zapłaty' }}
+      </button>
+    </template>
+
     <select
-      v-if="type === 'status'"
+      v-else-if="type === 'status'"
       class="brick__input brick__input--select"
       :value="modelValue || STATUS_OPTIONS[0]"
       @change="$emit('update:modelValue', $event.target.value)"
@@ -151,8 +219,15 @@ function onInput(event) {
       rows="3"
       :value="modelValue"
       :placeholder="placeholder"
-      @input="onInput"
+      @input="$emit('update:modelValue', $event.target.value), autoGrow()"
     ></textarea>
+
+    <button v-else-if="type === 'date'" class="datebtn" type="button" @click="picker = 'value'">
+      <span class="datebtn__value" :class="{ 'is-empty': !modelValue }">
+        {{ modelValue ? formatDateShort(modelValue) : 'wybierz datę' }}
+      </span>
+      <span class="datebtn__icon" aria-hidden="true">📅</span>
+    </button>
 
     <div v-else class="brick__inputwrap">
       <input
@@ -162,12 +237,20 @@ function onInput(event) {
         :inputmode="inputMode"
         :value="modelValue"
         :placeholder="placeholder"
-        @input="onInput"
+        @input="$emit('update:modelValue', $event.target.value)"
       />
       <span v-if="type === 'money'" class="brick__suffix">zł</span>
     </div>
 
     <span v-if="moneyHint" class="brick__hint">{{ moneyHint }}</span>
+
+    <DateSheet
+      v-if="picker"
+      :model-value="pickerValue"
+      :title="pickerTitle"
+      @update:model-value="onPicked"
+      @close="picker = null"
+    />
   </div>
 </template>
 
@@ -204,8 +287,29 @@ function onInput(event) {
 .brick__head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-height: 20px;
+}
+
+/* W wąskiej kolumnie nagłówek ma ~125px na uchwyt, ikonę, etykietę i „×".
+   Ikona jest tu najmniej potrzebna — bez niej etykiety mieszczą się w jednej linii. */
+.brick--span-1 .brick__icon {
+  display: none;
+}
+
+.brick__grip {
+  flex: none;
+  margin: -6px 0 -6px -5px;
+  padding: 6px 3px;
+  color: #cdbfb2;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: -1px;
+  /* przeciąganie nie może uruchamiać przewijania ani przewracania kartki */
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .brick__icon {
@@ -217,22 +321,38 @@ function onInput(event) {
 .brick__label {
   flex: 1;
   min-width: 0;
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   line-height: 1.25;
   text-transform: uppercase;
   color: var(--ink-faint);
   overflow-wrap: anywhere;
 }
 
-.brick__label--input {
+.brick--span-2 .brick__label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+/**
+ * Etykieta ma wyglądać na ~10px, ale pole poniżej 16px każe iOS przybliżyć widok.
+ * Dlatego czcionka ma 16px, a zmniejszamy ją skalowaniem; szerokość i prawy
+ * margines kompensują skalę, żeby pole zajmowało tyle miejsca co wcześniej.
+ * Selektor musi mieć taką samą specyficzność jak `.brick--span-2 .brick__label`,
+ * inaczej tamta reguła nadpisze rozmiar czcionki.
+ */
+.brick .brick__label--input {
+  --label-scale: 0.594; /* 16px × 0.594 ≈ 9,5px — tyle co etykiety stałe */
   border: 0;
   background: transparent;
   padding: 0;
-  width: 100%;
   min-width: 0;
-  font-size: 10px;
+  width: calc(100% / var(--label-scale));
+  margin-right: calc((1 / var(--label-scale) - 1) * -100%);
+  transform: scale(var(--label-scale));
+  transform-origin: left center;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -240,25 +360,35 @@ function onInput(event) {
   outline: none;
 }
 
+.brick--span-2 .brick__label--input {
+  --label-scale: 0.625; /* 16px × 0.625 = 10px */
+}
+
 .brick__action {
   flex: none;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  margin: -4px -4px -4px 0;
+  width: 23px;
+  height: 23px;
+  margin: -4px -3px -4px 0;
   border-radius: 50%;
   background: var(--blush-wash);
   color: var(--blush);
-  font-size: 13px;
+  font-size: 12px;
   text-decoration: none;
 }
 
 .brick__action--remove {
   background: transparent;
-  color: var(--ink-faint);
-  font-size: 20px;
+  color: #cdbfb2;
+  font-size: 18px;
   line-height: 1;
+}
+
+.brick__action--remove.is-confirming {
+  background: rgba(180, 84, 75, 0.12);
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .brick__inputwrap {
@@ -283,10 +413,33 @@ function onInput(event) {
   min-height: 22px;
 }
 
-/* natywne pole daty jest szerokie — zmniejszamy, żeby zmieściło się w kolumnie */
-.brick__input[type='date'] {
-  font-size: 14px;
+/* pole daty otwiera własny kalendarz — natywnego popupu nie da się ostylować */
+.datebtn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 22px;
+  text-align: left;
+}
+
+.datebtn__value {
+  font-size: 16px;
   font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.datebtn__value.is-empty {
+  font-weight: 400;
+  color: #cbbfb4;
+}
+
+.datebtn__icon {
+  flex: none;
+  font-size: 13px;
+  opacity: 0.7;
 }
 
 .brick__input::placeholder {
@@ -331,5 +484,100 @@ function onInput(event) {
   font-weight: 600;
   color: var(--gold);
   letter-spacing: 0.02em;
+}
+
+/* ---------- transza ---------- */
+
+.brick--inst {
+  background: linear-gradient(180deg, #fffdfa 0%, #fdf5ef 100%);
+}
+
+.brick--inst.is-paid {
+  border-color: #c3d2bd;
+  background: linear-gradient(180deg, #fbfdfa 0%, #f2f6f0 100%);
+}
+
+.inst {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.inst__amount {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.inst__due {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 11px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid var(--paper-edge);
+  text-align: left;
+}
+
+.inst__due:active {
+  background: var(--blush-wash);
+}
+
+.inst__due-label {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.inst__due-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.inst__due-value.is-empty {
+  font-weight: 500;
+  color: #cbbfb4;
+}
+
+.inst__paid {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 5px 11px 5px 6px;
+  border-radius: 999px;
+  background: var(--blush-wash);
+  color: var(--blush);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.is-paid .inst__paid {
+  background: var(--sage-wash);
+  color: #5f7159;
+}
+
+.inst__box {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  background: #fff;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  line-height: 1;
 }
 </style>
