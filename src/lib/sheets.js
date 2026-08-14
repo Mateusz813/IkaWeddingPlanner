@@ -162,6 +162,10 @@ export function disconnect() {
   sync.connected = false
   sync.error = ''
   sync.pending = false
+  // czyścimy też znaczniki, żeby po ponownym połączeniu znów zapytać
+  // o kierunek pierwszej synchronizacji zamiast wysyłać w ciemno
+  sync.lastPushAt = ''
+  sync.lastPullAt = ''
   clearTimeout(pushTimer)
   writeConfig()
 }
@@ -214,13 +218,14 @@ export async function pull() {
   }
 }
 
-/** Sprawdza połączenie bez ruszania danych. */
+/** Sprawdza połączenie i zagląda, co jest w arkuszu. Niczego nie zmienia. */
 export async function test() {
   sync.busy = 'test'
   sync.error = ''
   try {
     const data = await call({ action: 'read' })
-    return { ok: true, wierszy: Array.isArray(data.rows) ? data.rows.length : 0 }
+    const rows = Array.isArray(data.rows) ? data.rows : []
+    return { ok: true, wierszy: rows.length, kartek: fromRows(rows).length }
   } catch (err) {
     sync.error = err.message
     return { ok: false }

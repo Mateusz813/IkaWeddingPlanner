@@ -1,22 +1,32 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { connect, disconnect, pull, push, sync, test } from '../lib/sheets.js'
-import { state } from '../lib/store.js'
 
 const urlInput = ref(sync.url)
 const tokenInput = ref(sync.token)
 const message = ref('')
 const confirmPull = ref(false)
+const confirmPush = ref(false)
+/** Co zastaliśmy w arkuszu przy łączeniu: null albo { wierszy, kartek }. */
+const remote = ref(null)
 
 const canConnect = computed(() => urlInput.value.trim().length > 20 && tokenInput.value.trim().length > 0)
+
+/**
+ * Zaraz po połączeniu nie wysyłamy nic sami — drugi telefon nadpisałby wtedy
+ * pracę pierwszego, zanim zdążyłby ją pobrać. Kierunek wybiera użytkownik.
+ */
+const firstRun = computed(() => sync.connected && !sync.lastPushAt && !sync.lastPullAt)
 
 const statusText = computed(() => {
   if (sync.busy === 'push') return 'Wysyłam…'
   if (sync.busy === 'pull') return 'Pobieram…'
   if (sync.busy === 'test') return 'Sprawdzam…'
   if (sync.error) return 'Coś nie zadziałało'
+  if (firstRun.value) return 'Połączono — wybierz kierunek'
   if (sync.pending) return 'Czeka na wysłanie'
   if (sync.lastPushAt) return `Wysłano ${czas(sync.lastPushAt)}`
+  if (sync.lastPullAt) return `Pobrano ${czas(sync.lastPullAt)}`
   return 'Połączono'
 })
 
@@ -29,15 +39,28 @@ function czas(iso) {
 async function onConnect() {
   connect(urlInput.value, tokenInput.value)
   const wynik = await test()
-  if (wynik.ok) {
-    flash(`Połączono ✓ w arkuszu jest ${wynik.wierszy} wierszy`)
-    await push()
-  }
+  if (!wynik.ok) return
+  remote.value = wynik
+  flash(wynik.kartek ? `Połączono ✓ w arkuszu jest ${wynik.kartek} kartek` : 'Połączono ✓ arkusz jest pusty')
 }
 
 async function onPush() {
+  confirmPush.value = false
   await push()
   if (!sync.error) flash('Wysłano do arkusza ✓')
+}
+
+/** Oba potwierdzenia wykluczają się — inaczej potrafiły wyskoczyć naraz. */
+function askPush() {
+  confirmPull.value = false
+  // pusty arkusz nie ma czego stracić — pytamy tylko, gdy coś tam jest
+  if (firstRun.value && remote.value?.kartek) confirmPush.value = true
+  else onPush()
+}
+
+function askPull() {
+  confirmPush.value = false
+  confirmPull.value = true
 }
 
 async function onPull() {
@@ -50,6 +73,7 @@ function onDisconnect() {
   disconnect()
   urlInput.value = ''
   tokenInput.value = ''
+  remote.value = null
   flash('Rozłączono — dane zostają w telefonie')
 }
 
@@ -84,22 +108,55 @@ function flash(text) {
     </template>
 
     <template v-else>
-      <div class="sync__status" :class="{ 'is-error': !!sync.error, 'is-pending': sync.pending && !sync.error }">
+      <div class="sync__status" :class="{ 'is-error': !!sync.error, 'is-pending': (sync.pending || firstRun) && !sync.error }">
         <span class="sync__dot"></span>
         {{ statusText }}
       </div>
 
       <p v-if="sync.error" class="sync__error">{{ sync.error }}</p>
 
-      <div class="card__actions">
+      <!-- Pierwsza synchronizacja: nic nie dzieje się samo, kierunek wybiera użytkownik -->
+      <div v-if="firstRun" class="sync__first">
+        <p class="sync__first-info">
+          <template v-if="remote?.kartek">
+            W arkuszu są już dane — <strong>{{ remote.kartek }} kartek</strong>. Zdecyduj, która wersja jest ważniejsza.
+          </template>
+          <template v-else-if="remote"> Arkusz jest pusty. Wyślij do niego to, co masz w telefonie. </template>
+          <template v-else> Wybierz, w którą stronę mają pójść dane. </template>
+        </p>
+        <div class="card__actions">
+          <button class="btn btn--primary" type="button" :disabled="!!sync.busy" @click="askPush">
+            Wyślij moje dane
+          </button>
+          <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="askPull">
+            Pobierz z arkusza
+          </button>
+        </div>
+      </div>
+
+      <div v-else class="card__actions">
         <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="onPush">Wyślij teraz</button>
-        <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="confirmPull = true">
+        <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="askPull">
           Pobierz z arkusza
         </button>
       </div>
 
       <Transition name="pop">
-        <div v-if="confirmPull" class="sync__confirm">
+        <div v-if="confirmPush" class="sync__confirm sync__confirm--push">
+          <strong>Nadpisać arkusz?</strong>
+          <span>
+            W arkuszu jest {{ remote?.kartek }} kartek — zostaną <u>zastąpione</u> tym, co masz w tym telefonie.
+            Jeśli to praca kogoś innego, najpierw ją pobierz.
+          </span>
+          <div class="sync__confirm-row">
+            <button class="btn btn--ghost" type="button" @click="confirmPush = false">Anuluj</button>
+            <button class="btn btn--danger" type="button" @click="onPush">Tak, nadpisz</button>
+          </div>
+        </div>
+      </Transition>
+
+      <Transition name="pop">
+        <div v-if="confirmPull" class="sync__confirm sync__confirm--pull">
           <strong>Pobrać dane z arkusza?</strong>
           <span>
             To <u>zastąpi wszystko</u>, co jest teraz w tym telefonie — wszystkie kartki, kwoty i notatki.
@@ -195,6 +252,21 @@ function flash(text) {
   font-size: 12.5px;
   line-height: 1.45;
   color: var(--danger);
+}
+
+.sync__first {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(200, 162, 74, 0.09);
+  border: 1px solid var(--gold-soft);
+}
+
+.sync__first-info {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
 }
 
 .sync__confirm {

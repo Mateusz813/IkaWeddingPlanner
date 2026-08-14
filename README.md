@@ -76,6 +76,17 @@ kafelki, kwoty, terminy, transze, budżet i kolejność.
 - arkusz → aplikacja: **wyłącznie po naciśnięciu „Pobierz z arkusza"**
   i potwierdzeniu. Nigdy samo z siebie, bo to podmienia całą zawartość telefonu.
 
+### Pierwsze połączenie na każdym telefonie
+
+Po naciśnięciu „Połącz" aplikacja **tylko zagląda** do arkusza i pyta, w którą
+stronę mają pójść dane. Nic nie wysyła sama — drugi telefon nadpisałby wtedy
+pracę pierwszego, zanim zdążyłby ją pobrać.
+
+- telefon, na którym są dane → **Wyślij moje dane**
+- drugi telefon → **Pobierz z arkusza**
+
+Wysyłanie na niepusty arkusz dodatkowo pyta o potwierdzenie.
+
 ### Instalacja (raz)
 
 1. Nowy arkusz na `sheets.new`.
