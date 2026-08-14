@@ -277,6 +277,14 @@ function onDelete() {
           </div>
         </div>
 
+        <p class="vpage__balance-note">
+          Razem <strong>{{ formatPLN(totals.total) }}</strong>
+          <template v-if="totals.extraCount">
+            = {{ formatPLN(totals.base) }} + {{ totals.extraCount }}
+            {{ totals.extraCount === 1 ? 'dodatkowy koszt' : 'dodatkowe koszty' }} {{ formatPLN(totals.extra) }}
+          </template>
+        </p>
+
         <p v-if="totals.count" class="vpage__balance-note">
           {{ totals.count }} {{ totals.count === 1 ? 'transza' : 'transze' }} · rozpisane
           {{ formatPLN(totals.planned) }}<template v-if="totals.deposit > 0"> + zaliczka {{ formatPLN(totals.deposit) }}</template>

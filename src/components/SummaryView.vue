@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import SyncCard from './SyncCard.vue'
 import { exportData, importData, state, summary, value, vendorTotals } from '../lib/store.js'
 import { formatPLN } from '../lib/money.js'
 
@@ -143,6 +144,8 @@ function flash(text) {
           </button>
         </li>
       </ul>
+
+      <SyncCard />
 
       <div class="card card--backup">
         <span class="card__label">Kopia zapasowa</span>

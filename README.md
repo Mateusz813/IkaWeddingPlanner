@@ -63,6 +63,42 @@ same w ciągu minuty.
 - `vercel.json` pilnuje, żeby `sw.js`, `index.html` i manifest nie były
   cache'owane na sztywno — inaczej telefon nie zauważyłby nowej wersji.
 
+## Google Sheets jako baza danych
+
+Arkusz trzyma dokładnie to samo, co aplikacja: wszystkie kartki, wszystkie
+kafelki, kwoty, terminy, transze, budżet i kolejność.
+
+**Kierunek zapisu jest celowo niesymetryczny:**
+
+- aplikacja → arkusz: automatycznie, 3 sekundy po ostatniej zmianie, a także
+  przy chowaniu aplikacji i po odzyskaniu internetu,
+- arkusz → aplikacja: **wyłącznie po naciśnięciu „Pobierz z arkusza"**
+  i potwierdzeniu. Nigdy samo z siebie, bo to podmienia całą zawartość telefonu.
+
+### Instalacja (raz)
+
+1. Nowy arkusz na `sheets.new`.
+2. Rozszerzenia → Apps Script, wklej [`apps-script/Kod.gs`](apps-script/Kod.gs).
+3. Zmień `TOKEN` na własne długie hasło.
+4. Wdróż → Nowe wdrożenie → Aplikacja internetowa,
+   **Wykonaj jako: Ja**, **Kto ma dostęp: Wszyscy**. Skopiuj adres `/exec`.
+5. W aplikacji: Podsumowanie → Google Sheets → wklej adres i hasło → Połącz.
+
+Adres i hasło zapisują się w localStorage telefonu, **nie w kodzie aplikacji** —
+w publicznym buildzie na Vercelu nie ma żadnego sekretu. Na drugim telefonie
+trzeba je wkleić jeszcze raz.
+
+### Arkusze
+
+- `Kartki` — wiersz na kafelek. Kolumny czytelne (`Kartka`, `Pole`, `Wartość`,
+  `Termin`, `Zapłacone`), dalej techniczne (identyfikatory, klucz pola, typ,
+  numery porządkowe) — te można w Sheets ukryć.
+- `Ustawienia` — budżet i znacznik ostatniej zmiany.
+
+Wszystko zapisywane jest jako tekst, żeby Sheets nie przerabiał dat i kwot po
+swojemu. Przy ręcznej edycji daty przyjmowane są w obu formatach:
+`2026-09-12` i `12.09.2026`.
+
 ## Dane i kopia zapasowa
 
 Kartka to jedna lista bloków (`vendor.blocks`) — dzięki temu każdy kafelek da
@@ -89,10 +125,27 @@ src/
     PageIndexSheet.vue         spis kartek
   lib/
     store.js                   stan + zapis do localStorage
+    sheets.js                  synchronizacja z Google Sheets
     money.js                   parsowanie i formatowanie kwot
     dates.js                   daty ISO bez stref czasowych
     updater.js                 auto-aktualizacja PWA
+apps-script/
+  Kod.gs                       backend arkusza (wklejany w Apps Script)
 ```
+
+## Jak liczone są koszty
+
+Na kartkę:
+
+- **kwota podstawowa** — z kafelka „Kwota pełna", a gdy go nie ma lub jest pusty,
+  z zaliczki i transz razem (żeby suma nie leciała na zero),
+- **koszty dodatkowe** — każdy własny kafelek z kwotą; są doliczane do kwoty
+  podstawowej i pokazane w rozbiciu pod kafelkami,
+- **zapłacone** — zaliczka plus transze oznaczone jako zapłacone,
+- **pozostało** — koszt minus zapłacone.
+
+Transze to harmonogram płatności, a nie dodatkowy koszt — nie podbijają sumy.
+Jeśli zaliczka i transze przekroczą „Kwotę pełną", kartka to sygnalizuje.
 
 ## Drobiazgi, które łatwo zepsuć
 

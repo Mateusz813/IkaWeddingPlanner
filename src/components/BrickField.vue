@@ -149,6 +149,7 @@ watch(
         class="brick__label brick__label--input"
         :value="label"
         maxlength="40"
+        placeholder="nazwa pola"
         aria-label="Nazwa pola"
         @input="$emit('update:label', $event.target.value)"
       />

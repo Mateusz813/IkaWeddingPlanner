@@ -1,4 +1,4 @@
-import { reactive, watch } from 'vue'
+import { nextTick, reactive, watch } from 'vue'
 import { parseMoney } from './money.js'
 
 const STORAGE_KEY = 'ika-wedding-planner/v1'
@@ -51,7 +51,7 @@ export const STATUS_OPTIONS = [
 
 export const EXTRA_FIELD_TYPES = [
   { type: 'installment', label: 'Transza / rata' },
-  { type: 'money', label: 'Kwota' },
+  { type: 'money', label: 'Dodatkowy koszt' },
   { type: 'date', label: 'Data' },
   { type: 'text', label: 'Tekst' },
   { type: 'tel', label: 'Telefon' },
@@ -93,7 +93,8 @@ export function blockMeta(block) {
   }
   const type = block.type || 'text'
   return {
-    label: block.label || 'Pole',
+    // bez podmiany pustej nazwy na domyślną — inaczej nie da się jej skasować
+    label: block.label ?? '',
     type,
     icon: type === 'installment' ? '💸' : '✦',
     span: type === 'textarea' || type === 'installment' ? 2 : 1,
@@ -152,9 +153,23 @@ function migrateFromValues(raw) {
 
 function normalizeVendor(raw) {
   const vendor = { id: raw?.id || uid('v'), title: String(raw?.title ?? 'Nowy usługodawca'), blocks: [] }
-  vendor.blocks = Array.isArray(raw?.blocks)
+  const blocks = Array.isArray(raw?.blocks)
     ? raw.blocks.map(normalizeBlock).filter(Boolean)
     : migrateFromValues(raw)
+
+  // Pole stałe może wystąpić tylko raz — przy dwóch „Kwotach pełnych" liczenie
+  // brałoby pierwszą i cicho gubiło drugą. Nadmiar zostaje jako pole własne.
+  const seen = new Set()
+  vendor.blocks = blocks.map((block) => {
+    if (!block.key) return block
+    if (!seen.has(block.key)) {
+      seen.add(block.key)
+      return block
+    }
+    const def = FIELD_DEFS[block.key]
+    return { id: block.id, key: null, type: def?.type || 'text', label: def?.label || 'Pole', value: block.value }
+  })
+
   if (!vendor.blocks.length) vendor.blocks = DEFAULT_KEYS.map((k) => fixedBlock(k))
   return vendor
 }
@@ -169,10 +184,11 @@ function load() {
       vendors: vendors.length ? vendors : seed(),
       budget: typeof data?.budget === 'string' ? data.budget : '',
       index: Number.isInteger(data?.index) ? data.index : 0,
+      updatedAt: typeof data?.updatedAt === 'string' ? data.updatedAt : '',
     }
   } catch (err) {
     console.warn('[planer] nie udało się wczytać danych, startuję od nowa', err)
-    return { vendors: seed(), budget: '', index: 0 }
+    return { vendors: seed(), budget: '', index: 0, updatedAt: '' }
   }
 }
 
@@ -182,6 +198,8 @@ export const state = reactive({
   vendors: initial.vendors,
   budget: initial.budget,
   index: Math.min(Math.max(0, initial.index), Math.max(0, initial.vendors.length - 1)),
+  /** Kiedy ostatnio zmieniły się dane (nie licząc przewracania kartek). */
+  updatedAt: initial.updatedAt || new Date().toISOString(),
 })
 
 let saveTimer = null
@@ -194,7 +212,7 @@ function persist() {
         vendors: state.vendors,
         budget: state.budget,
         index: state.index,
-        updatedAt: new Date().toISOString(),
+        updatedAt: state.updatedAt,
       }),
     )
   } catch (err) {
@@ -202,14 +220,61 @@ function persist() {
   }
 }
 
+function schedulePersist() {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(persist, 250)
+}
+
+/** Nasłuch dla synchronizacji z arkuszem — wołany tylko przy zmianie danych. */
+const changeListeners = new Set()
+
+export function onDataChange(fn) {
+  changeListeners.add(fn)
+  return () => changeListeners.delete(fn)
+}
+
+let applyingRemote = false
+
 watch(
-  () => [state.vendors, state.budget, state.index],
+  () => [state.vendors, state.budget],
   () => {
-    clearTimeout(saveTimer)
-    saveTimer = setTimeout(persist, 250)
+    if (!applyingRemote) {
+      state.updatedAt = new Date().toISOString()
+      for (const fn of changeListeners) fn()
+    }
+    schedulePersist()
   },
   { deep: true },
 )
+
+// samo przewracanie kartek to nie zmiana danych — zapisujemy, ale nie wysyłamy
+watch(() => state.index, schedulePersist)
+
+export function snapshot() {
+  return { vendors: state.vendors, budget: state.budget, updatedAt: state.updatedAt }
+}
+
+/**
+ * Podmienia całą zawartość danymi z arkusza. Wołane WYŁĄCZNIE z przycisku
+ * „Pobierz z arkusza" — nigdy automatycznie, żeby nie nadpisać czyjejś pracy.
+ */
+export function applyRemote({ vendors, budget, updatedAt }) {
+  applyingRemote = true
+  const currentId = state.vendors[state.index]?.id
+
+  state.vendors = (Array.isArray(vendors) ? vendors : []).map(normalizeVendor)
+  if (!state.vendors.length) state.vendors = seed()
+  if (typeof budget === 'string') state.budget = budget
+  state.updatedAt = updatedAt || new Date().toISOString()
+
+  const at = state.vendors.findIndex((v) => v.id === currentId)
+  setIndex(at >= 0 ? at : state.index)
+
+  nextTick(() => {
+    applyingRemote = false
+    schedulePersist()
+  })
+}
 
 if (typeof window !== 'undefined') {
   const flush = () => {
@@ -278,6 +343,15 @@ export function setBlockPaid(vendorId, blockId, paid) {
   if (b) b.paid = !!paid
 }
 
+const NOWE_POLE_NAZWY = {
+  money: 'Dodatkowy koszt',
+  date: 'Termin',
+  tel: 'Telefon',
+  email: 'E-mail',
+  url: 'Link',
+  textarea: 'Notatka',
+}
+
 export function addBlock(vendorId, type = 'text') {
   const v = findVendor(vendorId)
   if (!v) return null
@@ -289,7 +363,7 @@ export function addBlock(vendorId, type = 'text') {
     return block
   }
 
-  const block = { id: uid('b'), key: null, type, label: 'Nowe pole', value: '' }
+  const block = { id: uid('b'), key: null, type, label: NOWE_POLE_NAZWY[type] || 'Nowe pole', value: '' }
   v.blocks.push(block)
   return block
 }
@@ -350,34 +424,51 @@ export function moveVendor(from, to) {
 /* ---------------- podsumowanie ---------------- */
 
 /**
+ * Koszt kartki = kwota podstawowa + koszty dodatkowe.
+ *
+ * Kwota podstawowa to „Kwota pełna", a gdy tego kafelka nie ma lub jest pusty —
+ * zaliczka razem z transzami (żeby suma nie leciała na zero).
+ * Koszty dodatkowe to własne kafelki z kwotą, które użytkownik sam dorzucił.
  * Zapłacone = zaliczka + transze oznaczone jako zapłacone.
- * Kwota pełna z pola „Kwota pełna"; jeśli puste, liczymy ją z zaliczki i transz.
  */
 export function vendorTotals(vendor) {
   const deposit = parseMoney(value(vendor, 'deposit'))
-  const inst = installments(vendor)
 
   let planned = 0
   let paidInstallments = 0
-  for (const b of inst) {
-    const amount = parseMoney(b.value)
-    planned += amount
-    if (b.paid) paidInstallments += amount
+  let extra = 0
+  let extraCount = 0
+  let installmentCount = 0
+
+  for (const block of vendor.blocks) {
+    if (block.type === 'installment') {
+      const amount = parseMoney(block.value)
+      planned += amount
+      installmentCount += 1
+      if (block.paid) paidInstallments += amount
+    } else if (!block.key && block.type === 'money') {
+      extra += parseMoney(block.value)
+      extraCount += 1
+    }
   }
 
   const stated = parseMoney(value(vendor, 'total'))
-  const total = stated || deposit + planned
+  const base = stated || deposit + planned
+  const total = base + extra
   const paid = deposit + paidInstallments
 
   return {
     total,
+    base,
     stated,
     deposit,
     planned,
     paidInstallments,
     paid,
+    extra,
+    extraCount,
     left: Math.max(0, total - paid),
-    count: inst.length,
+    count: installmentCount,
     /** zaliczka + transze wychodzą poza kwotę pełną — pewnie literówka */
     overplanned: stated > 0 && deposit + planned > stated + 0.005,
   }
