@@ -12,8 +12,9 @@ w przeglądarce (localStorage) — nic nie wychodzi na zewnątrz.
   status, terminy, osoba kontaktowa, dwa telefony, e-mail, strona, adres,
   notatki. Można dorzucić własne (`+ Dodaj kafelek`), skasować niepotrzebne
   i przywrócić skasowane.
-- **Przestawianie kafelków** — złap kafelek za uchwyt `⠿` i przeciągnij tam,
-  gdzie ma być. Kolejność zapisuje się osobno dla każdej kartki.
+- **Przestawianie kafelków i kartek** — złap za uchwyt `⠿` i przeciągnij tam,
+  gdzie ma być. Kafelki na kartce, kartki w spisie kartek. Kolejność kafelków
+  zapisuje się osobno dla każdej kartki.
 - **Transze** — kafelek „Transza / rata": kwota, własny termin i znacznik
   zapłaty. Można ich dodać dowolnie wiele (np. 3 transze za salę, każda z innym
   terminem). Zapłacone transze wliczają się do „już zapłacone" razem z zaliczką.
@@ -125,6 +126,7 @@ src/
     PageIndexSheet.vue         spis kartek
   lib/
     store.js                   stan + zapis do localStorage
+    dragSort.js                przeciąganie palcem (kafelki i kartki)
     sheets.js                  synchronizacja z Google Sheets
     money.js                   parsowanie i formatowanie kwot
     dates.js                   daty ISO bez stref czasowych

@@ -1,13 +1,25 @@
 <script setup>
-import { computed } from 'vue'
+import { ref } from 'vue'
 import { moveVendor, state, value, vendorTotals } from '../lib/store.js'
+import { useDragSort } from '../lib/dragSort.js'
 import { formatPLN } from '../lib/money.js'
 
 const emit = defineEmits(['close', 'goto', 'add'])
 
-const pages = computed(() =>
-  state.vendors.map((v, i) => ({ vendor: v, i, ...vendorTotals(v) })),
-)
+const listEl = ref(null)
+
+const { drag, renderList, ghostStyle, start } = useDragSort({
+  items: () => state.vendors,
+  scrollEl: listEl,
+  containerEl: listEl,
+  itemSelector: '.idx__row',
+  onDrop: (from, to) => moveVendor(from, to),
+})
+
+/** Numer kartki liczymy z aktualnego układu, bo w trakcie przeciągania się zmienia. */
+function numer(vendor) {
+  return state.vendors.findIndex((v) => v.id === vendor.id) + 1
+}
 </script>
 
 <template>
@@ -15,30 +27,42 @@ const pages = computed(() =>
     <div class="idx__panel">
       <div class="idx__grip" @click="emit('close')"></div>
       <h2 class="idx__title">Spis kartek</h2>
+      <p class="idx__hint">Przeciągnij za ⠿, żeby zmienić kolejność</p>
 
-      <ul class="idx__list">
-        <li v-for="p in pages" :key="p.vendor.id" :class="{ 'is-current': p.i === state.index }">
-          <button class="idx__item" type="button" @click="emit('goto', p.i)">
-            <span class="idx__num">{{ p.i + 1 }}</span>
-            <span class="idx__text">
-              <span class="idx__name">{{ p.vendor.title || 'Bez nazwy' }}</span>
-              <span class="idx__sub">{{ value(p.vendor, 'name') || '—' }}</span>
-            </span>
-            <span class="idx__amount">{{ p.total ? formatPLN(p.total) : '' }}</span>
-          </button>
-          <span class="idx__move">
-            <button type="button" aria-label="W górę" :disabled="p.i === 0" @click="moveVendor(p.i, p.i - 1)">↑</button>
+      <div ref="listEl" class="idx__list">
+        <template v-for="entry in renderList">
+          <div v-if="entry.kind === 'gap'" key="gap" class="drag-gap" :style="{ height: `${drag.h}px` }"></div>
+
+          <div
+            v-else
+            :key="entry.item.id"
+            class="idx__row"
+            :class="{ 'is-current': entry.item.id === state.vendors[state.index]?.id, 'is-floating': entry.floating }"
+            :style="entry.floating ? ghostStyle : null"
+          >
             <button
+              class="idx__drag"
               type="button"
-              aria-label="W dół"
-              :disabled="p.i === pages.length - 1"
-              @click="moveVendor(p.i, p.i + 1)"
+              aria-label="Przytrzymaj i przesuń kartkę"
+              @pointerdown="start($event, entry.item)"
+              @click.prevent
             >
-              ↓
+              ⠿
             </button>
-          </span>
-        </li>
-      </ul>
+
+            <button class="idx__item" type="button" @click="emit('goto', numer(entry.item) - 1)">
+              <span class="idx__num">{{ numer(entry.item) }}</span>
+              <span class="idx__text">
+                <span class="idx__name">{{ entry.item.title || 'Bez nazwy' }}</span>
+                <span class="idx__sub">{{ value(entry.item, 'name') || '—' }}</span>
+              </span>
+              <span class="idx__amount">
+                {{ vendorTotals(entry.item).total ? formatPLN(vendorTotals(entry.item).total) : '' }}
+              </span>
+            </button>
+          </div>
+        </template>
+      </div>
 
       <button class="btn btn--primary idx__add" type="button" @click="emit('add')">+ Dodaj nową kartkę</button>
     </div>
@@ -86,41 +110,81 @@ const pages = computed(() =>
 
 .idx__title {
   flex: none;
-  margin: 0 0 12px;
+  margin: 0;
   text-align: center;
   font-family: var(--font-display);
   font-size: 22px;
   font-weight: 700;
 }
 
+.idx__hint {
+  flex: none;
+  margin: 2px 0 12px;
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
 .idx__list {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  list-style: none;
-  margin: 0;
   padding: 0 0 6px;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.idx__list li {
+.idx__row {
   /* bez tego pozycje ściskają się zamiast przewijać */
   flex: none;
   display: flex;
   align-items: stretch;
-  gap: 6px;
   border-radius: var(--radius-sm);
   background: var(--paper);
   border: 1px solid var(--paper-edge);
   overflow: hidden;
 }
 
-.idx__list li.is-current {
+.idx__row.is-current {
   border-color: var(--blush);
   background: var(--blush-wash);
+}
+
+.idx__row.is-floating {
+  position: absolute;
+  z-index: 40;
+  pointer-events: none;
+  transform: rotate(-1deg) scale(1.02);
+  box-shadow: 0 18px 32px -14px rgba(58, 51, 48, 0.65);
+  border-color: var(--blush);
+}
+
+.drag-gap {
+  flex: none;
+  border-radius: var(--radius-sm);
+  border: 1.5px dashed var(--blush-soft);
+  background: rgba(240, 201, 194, 0.14);
+}
+
+.idx__drag {
+  flex: none;
+  width: 34px;
+  display: grid;
+  place-items: center;
+  color: #cdbfb2;
+  font-size: 15px;
+  letter-spacing: -1px;
+  border-right: 1px solid var(--paper-edge);
+  /* przeciąganie nie może przewijać listy */
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .idx__item {
@@ -129,7 +193,7 @@ const pages = computed(() =>
   display: flex;
   align-items: center;
   gap: 11px;
-  padding: 11px 4px 11px 12px;
+  padding: 11px 12px;
   text-align: left;
 }
 
@@ -180,24 +244,6 @@ const pages = computed(() =>
   font-size: 14px;
   font-weight: 700;
   color: var(--ink-soft);
-}
-
-.idx__move {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--paper-edge);
-}
-
-.idx__move button {
-  flex: 1;
-  width: 38px;
-  color: var(--ink-faint);
-  font-size: 13px;
-}
-
-.idx__move button:disabled {
-  opacity: 0.25;
 }
 
 .idx__add {

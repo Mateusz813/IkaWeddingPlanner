@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, ref } from 'vue'
 import BrickField from './BrickField.vue'
+import { useDragSort } from '../lib/dragSort.js'
 import {
   EXTRA_FIELD_TYPES,
   FIELD_DEFS,
@@ -38,165 +39,20 @@ const canRestore = computed(() => missingKeys(props.vendor))
 
 /* ---------------- przeciąganie kafelków ---------------- */
 
-/** null albo { blockId, index, span, w, h, grabX, grabY, x, y } — `index` to
- *  pozycja pustego miejsca w liście bez przeciąganego kafelka. */
-const drag = ref(null)
-
-/**
- * Przeciągany kafelek zostaje na swoim miejscu w liście (żeby przeglądarka nie
- * przeniosła węzła i nie zgubiła przechwyconego wskaźnika) — jest tylko wyjęty
- * z układu przez position:absolute. Puste miejsce wstawiamy obok.
- */
-const renderList = computed(() => {
-  const blocks = props.vendor.blocks
-  if (!drag.value) return blocks.map((block) => ({ kind: 'block', block, floating: false }))
-
-  const list = []
-  let restIdx = 0
-  for (const block of blocks) {
-    if (block.id === drag.value.blockId) {
-      list.push({ kind: 'block', block, floating: true })
-      continue
-    }
-    if (restIdx === drag.value.index) list.push({ kind: 'gap' })
-    list.push({ kind: 'block', block, floating: false })
-    restIdx += 1
-  }
-  if (drag.value.index >= restIdx) list.push({ kind: 'gap' })
-  return list
+const { drag, renderList, ghostStyle, start } = useDragSort({
+  items: () => props.vendor.blocks,
+  scrollEl,
+  containerEl: gridEl,
+  itemSelector: '.brick',
+  onDrop: (from, to) => moveBlock(props.vendor.id, from, to),
 })
-
-const ghostStyle = computed(() => {
-  const d = drag.value
-  if (!d) return null
-  return { left: `${d.x}px`, top: `${d.y}px`, width: `${d.w}px`, height: `${d.h}px` }
-})
-
-let autoScrollTimer = null
-let pointer = { x: 0, y: 0 }
 
 function onGrip(event, block) {
-  if (props.inert || drag.value) return
-  event.preventDefault()
-  event.stopPropagation()
-
-  const brickEl = event.target.closest('.brick')
-  const scroller = scrollEl.value
-  if (!brickEl || !scroller) return
-
-  const rect = brickEl.getBoundingClientRect()
-  const scRect = scroller.getBoundingClientRect()
-
-  drag.value = {
-    blockId: block.id,
-    index: props.vendor.blocks.findIndex((b) => b.id === block.id),
-    span: blockMeta(block).span,
-    w: rect.width,
-    h: rect.height,
-    grabX: event.clientX - rect.left,
-    grabY: event.clientY - rect.top,
-    x: rect.left - scRect.left + scroller.scrollLeft,
-    y: rect.top - scRect.top + scroller.scrollTop,
-  }
-
-  pointer = { x: event.clientX, y: event.clientY }
-  window.addEventListener('pointermove', onDragMove, { passive: false })
-  window.addEventListener('pointerup', onDragEnd)
-  window.addEventListener('pointercancel', onDragCancel)
-  autoScrollTimer = setInterval(autoScroll, 16)
-
-  // Przechwycenie wskaźnika omija trafianie w elementy, więc zdarzenia docierają
-  // nawet gdy przeciągany kafelek ma pointer-events: none. Gdyby się nie udało,
-  // przeciąganie i tak działa na nasłuchu na window — nie wolno tu wybuchnąć.
-  try {
-    event.target.setPointerCapture?.(event.pointerId)
-  } catch {
-    /* nieaktywny wskaźnik */
-  }
-  navigator.vibrate?.(8)
+  if (props.inert) return
+  start(event, block)
 }
 
-function placeGhost() {
-  const scroller = scrollEl.value
-  if (!drag.value || !scroller) return
-  const scRect = scroller.getBoundingClientRect()
-  drag.value.x = pointer.x - drag.value.grabX - scRect.left + scroller.scrollLeft
-  drag.value.y = pointer.y - drag.value.grabY - scRect.top + scroller.scrollTop
-}
-
-function onDragMove(event) {
-  if (!drag.value) return
-  event.preventDefault()
-  pointer = { x: event.clientX, y: event.clientY }
-  placeGhost()
-  updateGap()
-}
-
-/**
- * Puste miejsce wskakuje na pozycję kafelka pod palcem. Kierunek wynika z tego,
- * czy ten kafelek jest przed czy za obecnym pustym miejscem — dzięki temu nic
- * nie „drga" na granicy.
- */
-function updateGap() {
-  const grid = gridEl.value
-  if (!grid || !drag.value) return
-
-  const nodes = [...grid.children].filter((n) => !n.classList.contains('is-floating'))
-  let restIdx = 0
-
-  for (const node of nodes) {
-    if (node.classList.contains('brick-gap')) continue
-    const r = node.getBoundingClientRect()
-    if (pointer.x >= r.left && pointer.x <= r.right && pointer.y >= r.top && pointer.y <= r.bottom) {
-      drag.value.index = restIdx < drag.value.index ? restIdx : restIdx + 1
-      return
-    }
-    restIdx += 1
-  }
-}
-
-function autoScroll() {
-  const scroller = scrollEl.value
-  if (!drag.value || !scroller) return
-
-  const rect = scroller.getBoundingClientRect()
-  const zone = 64
-  let dy = 0
-  if (pointer.y < rect.top + zone) dy = -Math.ceil((rect.top + zone - pointer.y) / 5)
-  else if (pointer.y > rect.bottom - zone) dy = Math.ceil((pointer.y - (rect.bottom - zone)) / 5)
-  if (!dy) return
-
-  const before = scroller.scrollTop
-  scroller.scrollTop = Math.max(0, Math.min(scroller.scrollHeight, before + dy))
-  if (scroller.scrollTop === before) return
-  placeGhost()
-  updateGap()
-}
-
-function stopDrag() {
-  window.removeEventListener('pointermove', onDragMove)
-  window.removeEventListener('pointerup', onDragEnd)
-  window.removeEventListener('pointercancel', onDragCancel)
-  clearInterval(autoScrollTimer)
-  autoScrollTimer = null
-}
-
-function onDragEnd() {
-  const d = drag.value
-  stopDrag()
-  drag.value = null
-  if (!d) return
-  const from = props.vendor.blocks.findIndex((b) => b.id === d.blockId)
-  if (from !== -1) moveBlock(props.vendor.id, from, d.index)
-}
-
-/** System przejął gest — kafelek wraca tam, skąd go wzięliśmy. */
-function onDragCancel() {
-  stopDrag()
-  drag.value = null
-}
-
-onBeforeUnmount(stopDrag)
+const gapSpan = computed(() => (drag.value ? blockMeta(props.vendor.blocks.find((b) => b.id === drag.value.id) || {}).span : 1))
 
 /* ---------------- dodawanie i usuwanie ---------------- */
 
@@ -233,33 +89,32 @@ function onDelete() {
       </header>
 
       <section ref="gridEl" class="vpage__grid">
-        <template v-for="item in renderList">
+        <template v-for="entry in renderList">
           <div
-            v-if="item.kind === 'gap'"
+            v-if="entry.kind === 'gap'"
             key="gap"
-            class="brick-gap"
-            :class="`brick--span-${drag.span}`"
+            class="drag-gap"
+            :class="`brick--span-${gapSpan}`"
             :style="{ minHeight: `${drag.h}px` }"
           ></div>
 
           <BrickField
             v-else
-            :key="item.block.id"
-            v-bind="blockMeta(item.block)"
-            class="brick-item"
-            :class="{ 'is-floating': item.floating }"
-            :style="item.floating ? ghostStyle : null"
-            :model-value="item.block.value"
-            :due="item.block.due || ''"
-            :paid="!!item.block.paid"
+            :key="entry.item.id"
+            v-bind="blockMeta(entry.item)"
+            :class="{ 'is-floating': entry.floating }"
+            :style="entry.floating ? ghostStyle : null"
+            :model-value="entry.item.value"
+            :due="entry.item.due || ''"
+            :paid="!!entry.item.paid"
             :removable="true"
             :draggable="!inert"
-            @update:model-value="setBlockValue(vendor.id, item.block.id, $event)"
-            @update:label="setBlockLabel(vendor.id, item.block.id, $event)"
-            @update:due="setBlockDue(vendor.id, item.block.id, $event)"
-            @update:paid="setBlockPaid(vendor.id, item.block.id, $event)"
-            @remove="removeBlock(vendor.id, item.block.id)"
-            @grip="onGrip($event, item.block)"
+            @update:model-value="setBlockValue(vendor.id, entry.item.id, $event)"
+            @update:label="setBlockLabel(vendor.id, entry.item.id, $event)"
+            @update:due="setBlockDue(vendor.id, entry.item.id, $event)"
+            @update:paid="setBlockPaid(vendor.id, entry.item.id, $event)"
+            @remove="removeBlock(vendor.id, entry.item.id)"
+            @grip="onGrip($event, entry.item)"
           />
         </template>
       </section>
@@ -436,7 +291,7 @@ function onDelete() {
   opacity: 0.97;
 }
 
-.brick-gap {
+.drag-gap {
   border-radius: var(--radius-sm);
   border: 1.5px dashed var(--blush-soft);
   background: rgba(240, 201, 194, 0.14);

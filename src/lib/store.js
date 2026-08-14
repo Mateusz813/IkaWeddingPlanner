@@ -414,11 +414,15 @@ export function removeVendor(vendorId) {
   setIndex(Math.min(i, state.vendors.length - 1))
 }
 
+/** Jak moveBlock: `to` liczone w liście bez przenoszonej kartki. */
 export function moveVendor(from, to) {
-  if (from === to || from < 0 || to < 0 || from >= state.vendors.length || to >= state.vendors.length) return
-  const [v] = state.vendors.splice(from, 1)
-  state.vendors.splice(to, 0, v)
-  state.index = to
+  if (from < 0 || from >= state.vendors.length) return
+  // zostajemy na tej kartce, którą użytkownik ogląda — nawet jeśli przesunął inną
+  const currentId = state.vendors[state.index]?.id
+  const [vendor] = state.vendors.splice(from, 1)
+  state.vendors.splice(Math.min(Math.max(0, to), state.vendors.length), 0, vendor)
+  const at = state.vendors.findIndex((v) => v.id === currentId)
+  if (at >= 0) state.index = at
 }
 
 /* ---------------- podsumowanie ---------------- */
