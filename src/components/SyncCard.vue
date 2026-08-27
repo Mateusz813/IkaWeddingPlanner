@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { connect, disconnect, pull, push, sync, test } from '../lib/sheets.js'
+import { connect, disconnect, ktoryScript, pull, push, sync, test } from '../lib/sheets.js'
 
 const urlInput = ref(sync.url)
 const tokenInput = ref(sync.token)
@@ -104,6 +104,8 @@ function flash(text) {
         Masz zmiany, których nie ma jeszcze w arkuszu.
       </p>
 
+      <p class="sync__skrypt">skrypt {{ ktoryScript() }}</p>
+
       <dl class="sync__log">
         <div><dt>Ostatni zapis</dt><dd>{{ ostatnioZapisano || '—' }}</dd></div>
         <div><dt>Ostatni odczyt</dt><dd>{{ ostatnioWczytano || '—' }}</dd></div>
@@ -186,6 +188,14 @@ function flash(text) {
 
 .sync__hint.is-warn {
   color: var(--gold);
+}
+
+.sync__skrypt {
+  margin: 10px 0 0;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
 }
 
 .sync__log {

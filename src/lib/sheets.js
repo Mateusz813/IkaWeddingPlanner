@@ -29,25 +29,38 @@ export const sync = reactive({
 })
 
 function readConfig() {
+  let zapisane = null
   try {
     const raw = localStorage.getItem(CONFIG_KEY)
-    if (raw) {
-      const cfg = JSON.parse(raw)
-      sync.url = typeof cfg?.url === 'string' ? cfg.url : ''
-      sync.token = typeof cfg?.token === 'string' ? cfg.token : ''
-      sync.lastPushAt = cfg?.lastPushAt || ''
-      sync.lastPullAt = cfg?.lastPullAt || ''
-    }
+    if (raw) zapisane = JSON.parse(raw)
   } catch {
     /* pusta albo uszkodzona konfiguracja */
   }
 
-  if (!sync.url && ENV_URL && ENV_TOKEN) {
+  sync.lastPushAt = zapisane?.lastPushAt || ''
+  sync.lastPullAt = zapisane?.lastPullAt || ''
+
+  if (ENV_URL && ENV_TOKEN) {
+    // Adres z konfiguracji wdrożenia jest źródłem prawdy i wygrywa z tym, co
+    // ktoś kiedyś wkleił ręcznie. Inaczej telefon, na którym raz wpisano stary
+    // adres, zostawał na nim na zawsze i podmiana adresu nigdy by nie dotarła.
     sync.url = ENV_URL
     sync.token = ENV_TOKEN
     sync.auto = true
+    if (zapisane?.url || zapisane?.token) writeConfig()
+  } else {
+    sync.url = typeof zapisane?.url === 'string' ? zapisane.url : ''
+    sync.token = typeof zapisane?.token === 'string' ? zapisane.token : ''
+    sync.auto = false
   }
+
   sync.connected = !!(sync.url && sync.token)
+}
+
+/** Ostatnie znaki adresu skryptu — do rozpoznania, z którym wdrożeniem gadamy. */
+export function ktoryScript() {
+  const m = /\/macros\/s\/([^/]+)\//.exec(sync.url)
+  return m ? '…' + m[1].slice(-8) : '—'
 }
 
 function writeConfig() {
