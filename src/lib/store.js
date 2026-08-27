@@ -1,6 +1,5 @@
 import { nextTick, reactive, watch } from 'vue'
 import { parseMoney } from './money.js'
-import { mergeTombstones, mergeVendors, pruneTombstones } from './merge.js'
 
 const STORAGE_KEY = 'ika-wedding-planner/v1'
 
@@ -209,7 +208,7 @@ function normalizeVendor(raw) {
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { vendors: seed(), budget: '', index: 0, updatedAt: '', deleted: {} }
+    if (!raw) return { vendors: seed(), budget: '', index: 0, updatedAt: '' }
     const data = JSON.parse(raw)
     const vendors = Array.isArray(data?.vendors) ? data.vendors.map(normalizeVendor) : seed()
     return {
@@ -217,11 +216,10 @@ function load() {
       budget: typeof data?.budget === 'string' ? data.budget : '',
       index: Number.isInteger(data?.index) ? data.index : 0,
       updatedAt: typeof data?.updatedAt === 'string' ? data.updatedAt : '',
-      deleted: data?.deleted && typeof data.deleted === 'object' ? data.deleted : {},
     }
   } catch (err) {
     console.warn('[planer] nie udało się wczytać danych, startuję od nowa', err)
-    return { vendors: seed(), budget: '', index: 0, updatedAt: '', deleted: {} }
+    return { vendors: seed(), budget: '', index: 0, updatedAt: '' }
   }
 }
 
@@ -237,8 +235,6 @@ export const state = reactive({
    * nowszą od arkusza i nie nadpisała go pustymi kartkami.
    */
   updatedAt: initial.updatedAt || '',
-  /** Skasowane kartki i kafelki: id → kiedy. Bez tego wracałyby przy scalaniu. */
-  deleted: pruneTombstones(initial.deleted || {}),
 })
 
 let saveTimer = null
@@ -252,7 +248,6 @@ function persist() {
         budget: state.budget,
         index: state.index,
         updatedAt: state.updatedAt,
-        deleted: state.deleted,
       }),
     )
   } catch (err) {
@@ -295,43 +290,22 @@ export function snapshot() {
     vendors: state.vendors,
     budget: state.budget,
     updatedAt: state.updatedAt,
-    deleted: state.deleted,
   }
 }
 
 /**
- * Wciąga zmiany z arkusza, scalając je z tym, co jest w telefonie — pole po
- * polu, wygrywa nowszy znacznik. Nic nie jest nadpisywane hurtem.
- * Zwraca true, jeśli cokolwiek się zmieniło.
+ * Wstawia zawartość arkusza w miejsce tego, co jest w telefonie — w całości,
+ * razem z kolejnością kartek i kafelków. Wołane wyłącznie z przycisku
+ * „Wczytaj z arkusza" oraz przy wczytywaniu kopii zapasowej.
  */
-export function mergeRemote({ vendors, budget, updatedAt, deleted }) {
-  const tombstones = pruneTombstones(mergeTombstones(state.deleted, deleted || {}))
-  const remote = (Array.isArray(vendors) ? vendors : []).map(normalizeVendor)
-
-  // Telefon, który jeszcze niczego nie zmieniał, ma tylko puste kartki startowe.
-  // Scalanie dołożyłoby je do zawartości arkusza — zamiast tego bierzemy arkusz
-  // w całości. Dotyczy nowego telefonu i ponownej instalacji.
-  const nicNieZmieniano = !state.updatedAt
-  const scalone = nicNieZmieniano && remote.length ? remote : mergeVendors(state.vendors, remote, tombstones)
-
-  const przed = JSON.stringify(state.vendors)
-  const po = JSON.stringify(scalone)
-  const budzetSieZmienil = typeof budget === 'string' && budget !== state.budget && !state.budget
-
-  if (przed === po && !budzetSieZmienil) {
-    state.deleted = tombstones
-    if (updatedAt) state.updatedAt = updatedAt
-    return false
-  }
-
+export function applyRemote({ vendors, budget, updatedAt }) {
   applyingRemote = true
   const currentId = state.vendors[state.index]?.id
 
-  state.deleted = tombstones
-  state.vendors = scalone.length ? scalone : state.vendors
-  // budżet bierzemy z arkusza tylko wtedy, gdy lokalnie go nie ma
-  if (budzetSieZmienil) state.budget = budget
-  if (updatedAt) state.updatedAt = updatedAt
+  state.vendors = (Array.isArray(vendors) ? vendors : []).map(normalizeVendor)
+  if (!state.vendors.length) state.vendors = seed()
+  if (typeof budget === 'string') state.budget = budget
+  state.updatedAt = updatedAt || teraz()
 
   const at = state.vendors.findIndex((v) => v.id === currentId)
   setIndex(at >= 0 ? at : state.index)
@@ -340,7 +314,6 @@ export function mergeRemote({ vendors, budget, updatedAt, deleted }) {
     applyingRemote = false
     schedulePersist()
   })
-  return true
 }
 
 /* ---------------- odczyt ---------------- */
@@ -447,7 +420,6 @@ export function removeBlock(vendorId, blockId) {
   const v = findVendor(vendorId)
   if (!v) return
   v.blocks = v.blocks.filter((b) => b.id !== blockId)
-  state.deleted[blockId] = teraz()
 }
 
 /**
@@ -476,11 +448,6 @@ export function addVendor(title = 'Nowy usługodawca', after = state.index) {
 export function removeVendor(vendorId) {
   const i = state.vendors.findIndex((x) => x.id === vendorId)
   if (i === -1) return
-  // kartkę i jej kafelki trzeba zapamiętać jako skasowane, inaczej wrócą
-  // przy scalaniu z kopią z drugiego telefonu
-  const znacznik = teraz()
-  state.deleted[vendorId] = znacznik
-  for (const block of state.vendors[i].blocks) state.deleted[block.id] = znacznik
   state.vendors.splice(i, 1)
   if (!state.vendors.length) state.vendors.push(createVendor('Nowy usługodawca'))
   setIndex(Math.min(i, state.vendors.length - 1))

@@ -1,35 +1,31 @@
 import { reactive } from 'vue'
-import { FIELD_DEFS, blockMeta, mergeRemote, onDataChange, snapshot, state } from './store.js'
+import { FIELD_DEFS, applyRemote, blockMeta, onDataChange, snapshot } from './store.js'
 import { coerceISO } from './dates.js'
 
 const CONFIG_KEY = 'ika-wedding-planner/sync'
 
-/** Wysyłka po ostatniej zmianie — na tyle długo, żeby nie strzelać przy każdej literze. */
-const PUSH_DELAY = 3000
-/** Jak często telefon pyta arkusz „czy coś się zmieniło". */
-const POLL_INTERVAL = 12000
-/** Cisza po własnej zmianie, zanim wpuścimy cudze dane — żeby nie wyrwać tekstu spod palców. */
-const EDIT_QUIET = 6000
-
 /**
  * Adres i hasło wbudowane przy budowaniu aplikacji (zmienne środowiskowe
- * Vercela). Dzięki nim nikt nie musi niczego wklejać — aplikacja startuje
- * już połączona. W repozytorium tych wartości nie ma.
+ * Vercela). Dzięki nim nikt nie musi niczego wklejać.
  */
 const ENV_URL = String(import.meta.env.VITE_SHEETS_URL || '').trim()
 const ENV_TOKEN = String(import.meta.env.VITE_SHEETS_TOKEN || '').trim()
 
+/**
+ * Synchronizacja jest w całości ręczna: zapis i odczyt dzieją się WYŁĄCZNIE po
+ * naciśnięciu przycisku. Nic nie chodzi w tle, nic nie wysyła się samo.
+ */
 export const sync = reactive({
   url: '',
   token: '',
-  /** true = adres i hasło z konfiguracji, użytkownik nic nie wpisywał */
   auto: false,
   connected: false,
   busy: '',
   lastPushAt: '',
   lastPullAt: '',
   error: '',
-  pending: false,
+  /** są zmiany zrobione po ostatnim zapisie do arkusza */
+  unsaved: false,
 })
 
 function readConfig() {
@@ -46,7 +42,6 @@ function readConfig() {
     /* pusta albo uszkodzona konfiguracja */
   }
 
-  // ręczne ustawienie ma pierwszeństwo, ale normalnie nikt go nie używa
   if (!sync.url && ENV_URL && ENV_TOKEN) {
     sync.url = ENV_URL
     sync.token = ENV_TOKEN
@@ -60,8 +55,6 @@ function writeConfig() {
     localStorage.setItem(
       CONFIG_KEY,
       JSON.stringify({
-        // wbudowanych wartości nie zapisujemy — inaczej zmiana w Vercelu
-        // nigdy by nie doszła do telefonu
         url: sync.auto ? '' : sync.url,
         token: sync.auto ? '' : sync.token,
         lastPushAt: sync.lastPushAt,
@@ -103,26 +96,44 @@ async function call(payload) {
 
 /* ---------------- zamiana danych na wiersze arkusza ---------------- */
 
+/** Nagłówki wysyłamy razem z danymi, żeby skrypt nie musiał ich znać z góry. */
+export const KOLUMNY = [
+  'Kartka',
+  'Pole',
+  'Wartość',
+  'Termin',
+  'Zapłacone',
+  'id kartki',
+  'id pola',
+  'klucz',
+  'typ',
+  'nr kartki',
+  'nr pola',
+  'zmieniono',
+  'kartka zmieniono',
+]
+
 export function toRows(vendors) {
   const rows = []
   vendors.forEach((vendor, vi) => {
     vendor.blocks.forEach((block, bi) => {
       const meta = blockMeta(block)
       rows.push([
-        vendor.title,
-        meta.label,
+        vendor.title ?? '',
+        meta.label ?? '',
         block.value ?? '',
         block.due ?? '',
         block.paid ? 'tak' : '',
-        vendor.id,
-        block.id,
+        vendor.id ?? '',
+        block.id ?? '',
         block.key || '',
         block.key ? '' : block.type || 'text',
+        // kolejność kartek i kafelków — dzięki temu układ z przeciągania wraca
         String(vi + 1),
         String(bi + 1),
         block.at || '',
         vendor.at || '',
-      ])
+      ].map((c) => (c === null || c === undefined ? '' : String(c))))
     })
   })
   return rows
@@ -134,8 +145,22 @@ export function fromRows(rows) {
   const vendors = new Map()
 
   rows.forEach((row, i) => {
-    const [title, label, value, due, paid, vendorId, blockId, key, type, vOrder, bOrder, blockAt, vendorAt] =
-      row.map((c) => (c === null || c === undefined ? '' : String(c)))
+    // wiersz może mieć mniej kolumn (starszy arkusz) — brakujące traktujemy jako puste
+    const k = (n) => (row[n] === null || row[n] === undefined ? '' : String(row[n]))
+    const title = k(0)
+    const label = k(1)
+    const value = k(2)
+    const due = k(3)
+    const paid = k(4)
+    const vendorId = k(5)
+    const blockId = k(6)
+    const key = k(7)
+    const type = k(8)
+    const vOrder = k(9)
+    const bOrder = k(10)
+    const blockAt = k(11)
+    const vendorAt = k(12)
+
     if (!title && !label && !value) return
 
     const vKey = vendorId || `tytuł:${title}`
@@ -143,8 +168,8 @@ export function fromRows(rows) {
       vendors.set(vKey, {
         id: vendorId || undefined,
         title: title || 'Nowa kartka',
-        at: vendorAt || '',
-        order: Number(vOrder) || 9999,
+        at: vendorAt,
+        order: Number(vOrder) || 9999 + i,
         blocks: [],
       })
     }
@@ -153,8 +178,8 @@ export function fromRows(rows) {
 
     const known = key && FIELD_DEFS[key]
     const block = known
-      ? { id: blockId || undefined, key, value, at: blockAt || '' }
-      : { id: blockId || undefined, key: null, type: type || 'text', label: label || 'Pole', value, at: blockAt || '' }
+      ? { id: blockId || undefined, key, value, at: blockAt }
+      : { id: blockId || undefined, key: null, type: type || 'text', label: label || 'Pole', value, at: blockAt }
 
     if (block.type === 'installment') {
       block.due = coerceISO(due)
@@ -169,7 +194,7 @@ export function fromRows(rows) {
     .map((v) => ({ id: v.id, title: v.title, at: v.at, blocks: v.blocks.sort((a, b) => a.order - b.order) }))
 }
 
-/* ---------------- operacje ---------------- */
+/* ---------------- operacje (tylko z przycisku) ---------------- */
 
 export function connect(url, token) {
   sync.url = String(url || '').trim()
@@ -184,8 +209,6 @@ export function disconnect() {
   sync.lastPushAt = ''
   sync.lastPullAt = ''
   sync.error = ''
-  sync.pending = false
-  clearTimeout(pushTimer)
   if (!sync.auto) {
     sync.url = ''
     sync.token = ''
@@ -194,67 +217,49 @@ export function disconnect() {
   writeConfig()
 }
 
-/**
- * Zapis do arkusza: najpierw wciągamy to, co zdążyła zmienić druga osoba,
- * scalamy pole po polu, dopiero potem zapisujemy wynik. Bez tego kroku zapis
- * z jednego telefonu kasowałby świeże zmiany z drugiego.
- */
-export async function push({ silent = false } = {}) {
-  if (!sync.connected || sync.busy) return
+/** ZAPIS: cała zawartość telefonu ląduje w arkuszu, razem z kolejnością. */
+export async function push() {
+  if (!sync.connected || sync.busy) return null
   sync.busy = 'push'
-  if (!silent) sync.error = ''
+  sync.error = ''
   try {
-    const remote = await call({ action: 'read' })
-    mergeRemote({
-      vendors: fromRows(Array.isArray(remote.rows) ? remote.rows : []),
-      budget: typeof remote.budget === 'string' ? remote.budget : undefined,
-      deleted: remote.deleted,
-    })
-
-    const stamp = new Date().toISOString()
     const snap = snapshot()
+    const rows = toRows(snap.vendors)
     await call({
       action: 'write',
-      rows: toRows(snap.vendors),
-      deleted: snap.deleted,
+      columns: KOLUMNY,
+      rows,
       budget: snap.budget,
-      updatedAt: stamp,
+      updatedAt: new Date().toISOString(),
     })
-    state.updatedAt = stamp
-    knownRemoteStamp = stamp
     sync.lastPushAt = new Date().toISOString()
-    sync.pending = false
-    sync.error = ''
+    sync.unsaved = false
     writeConfig()
+    return { kartki: snap.vendors.length, wierszy: rows.length }
   } catch (err) {
-    if (!silent) sync.error = err.message
-    sync.pending = true
+    sync.error = err.message
+    return null
   } finally {
     sync.busy = ''
   }
 }
 
-/** Wciąga zmiany z arkusza i scala je z tym, co jest w telefonie. */
-export async function pull({ silent = false } = {}) {
+/** ODCZYT: zawartość arkusza zastępuje to, co jest w telefonie. */
+export async function pull() {
   if (!sync.connected || sync.busy) return null
   sync.busy = 'pull'
-  if (!silent) sync.error = ''
+  sync.error = ''
   try {
     const data = await call({ action: 'read' })
     const vendors = fromRows(Array.isArray(data.rows) ? data.rows : [])
-    mergeRemote({
-      vendors,
-      budget: typeof data.budget === 'string' ? data.budget : undefined,
-      updatedAt: data.updatedAt,
-      deleted: data.deleted,
-    })
-    knownRemoteStamp = data.updatedAt || ''
+    if (!vendors.length) throw new Error('Arkusz jest pusty — nie ma czego wczytać')
+    applyRemote({ vendors, budget: typeof data.budget === 'string' ? data.budget : undefined })
     sync.lastPullAt = new Date().toISOString()
-    sync.error = ''
+    sync.unsaved = false
     writeConfig()
     return { kartki: vendors.length }
   } catch (err) {
-    if (!silent) sync.error = err.message
+    sync.error = err.message
     return null
   } finally {
     sync.busy = ''
@@ -277,82 +282,13 @@ export async function test() {
   }
 }
 
-/* ---------------- automatyczna synchronizacja ---------------- */
-
-let pushTimer = null
-let pollTimer = null
-let lastLocalEditAt = 0
-let knownRemoteStamp = ''
-
-/** Sam znacznik czasu z arkusza. Starszy skrypt tego nie zna — wtedy pełny odczyt. */
-async function remoteStamp() {
-  try {
-    const data = await call({ action: 'stamp' })
-    return String(data.updatedAt || '')
-  } catch (err) {
-    if (!/Nieznana akcja/i.test(err.message)) throw err
-    const data = await call({ action: 'read' })
-    return String(data.updatedAt || '')
-  }
-}
-
-function userIsTyping() {
-  const el = document.activeElement
-  return !!el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)
-}
-
 /**
- * Pobiera cudze zmiany, ale tylko wtedy, gdy jest bezpiecznie: nic nie czeka na
- * wysłanie, użytkownik nic nie pisze i od jego ostatniej zmiany minęła chwila.
+ * Jedyne, co dzieje się samo: zapalenie informacji „masz niezapisane zmiany".
+ * Żadnych zapytań do arkusza bez naciśnięcia przycisku.
  */
-async function poll() {
-  if (!sync.connected || sync.busy || sync.pending) return
-  if (document.hidden || userIsTyping()) return
-  if (Date.now() - lastLocalEditAt < EDIT_QUIET) return
-
-  try {
-    const stamp = await remoteStamp()
-    if (!stamp || stamp === knownRemoteStamp) return
-    knownRemoteStamp = stamp
-    // arkusz jest nowszy niż to, co mamy — bierzemy jego wersję
-    if (stamp > (state.updatedAt || '')) await pull({ silent: true })
-  } catch {
-    /* brak sieci albo chwilowy błąd — spróbujemy za chwilę */
-  }
-}
-
 export function initSync() {
   readConfig()
-
   onDataChange(() => {
-    if (!sync.connected) return
-    lastLocalEditAt = Date.now()
-    sync.pending = true
-    clearTimeout(pushTimer)
-    pushTimer = setTimeout(() => push({ silent: true }), PUSH_DELAY)
+    sync.unsaved = true
   })
-
-  pollTimer = setInterval(poll, POLL_INTERVAL)
-
-  document.addEventListener('visibilitychange', () => {
-    if (!sync.connected) return
-    if (document.hidden) {
-      // wychodzimy z aplikacji — dosyłamy to, co czeka
-      if (sync.pending) {
-        clearTimeout(pushTimer)
-        push({ silent: true })
-      }
-      return
-    }
-    poll()
-  })
-
-  window.addEventListener('online', () => {
-    if (!sync.connected) return
-    if (sync.pending) push({ silent: true })
-    else poll()
-  })
-
-  // pierwsze sprawdzenie zaraz po starcie
-  if (sync.connected) setTimeout(poll, 800)
 }

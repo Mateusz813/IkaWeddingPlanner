@@ -6,74 +6,39 @@ const urlInput = ref(sync.url)
 const tokenInput = ref(sync.token)
 const message = ref('')
 const confirmPull = ref(false)
-const confirmPush = ref(false)
-/** Co zastaliśmy w arkuszu przy łączeniu: null albo { wierszy, kartek }. */
-const remote = ref(null)
 
 const canConnect = computed(() => urlInput.value.trim().length > 20 && tokenInput.value.trim().length > 0)
 
-/**
- * Zaraz po połączeniu nie wysyłamy nic sami — drugi telefon nadpisałby wtedy
- * pracę pierwszego, zanim zdążyłby ją pobrać. Kierunek wybiera użytkownik.
- */
-const firstRun = computed(() => sync.connected && !sync.auto && !sync.lastPushAt && !sync.lastPullAt)
-
-const statusText = computed(() => {
-  if (sync.busy === 'push') return 'Wysyłam…'
-  if (sync.busy === 'pull') return 'Pobieram…'
-  if (sync.busy === 'test') return 'Sprawdzam…'
-  if (sync.error) return 'Coś nie zadziałało'
-  if (firstRun.value) return 'Połączono — wybierz kierunek'
-  if (sync.pending) return 'Czeka na wysłanie'
-  const ostatnie = [sync.lastPushAt, sync.lastPullAt].filter(Boolean).sort().pop()
-  if (ostatnie) return `Zsynchronizowano ${czas(ostatnie)}`
-  return sync.auto ? 'Synchronizacja włączona' : 'Połączono'
-})
+const ostatnioZapisano = computed(() => (sync.lastPushAt ? czas(sync.lastPushAt) : ''))
+const ostatnioWczytano = computed(() => (sync.lastPullAt ? czas(sync.lastPullAt) : ''))
 
 function czas(iso) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 async function onConnect() {
   connect(urlInput.value, tokenInput.value)
   const wynik = await test()
-  if (!wynik.ok) return
-  remote.value = wynik
-  flash(wynik.kartek ? `Połączono ✓ w arkuszu jest ${wynik.kartek} kartek` : 'Połączono ✓ arkusz jest pusty')
+  if (wynik.ok) flash(wynik.kartek ? `Połączono ✓ w arkuszu jest ${wynik.kartek} kartek` : 'Połączono ✓ arkusz jest pusty')
 }
 
 async function onPush() {
-  confirmPush.value = false
-  await push()
-  if (!sync.error) flash('Wysłano do arkusza ✓')
-}
-
-/** Oba potwierdzenia wykluczają się — inaczej potrafiły wyskoczyć naraz. */
-function askPush() {
-  confirmPull.value = false
-  // pusty arkusz nie ma czego stracić — pytamy tylko, gdy coś tam jest
-  if (firstRun.value && remote.value?.kartek) confirmPush.value = true
-  else onPush()
-}
-
-function askPull() {
-  confirmPush.value = false
-  confirmPull.value = true
+  const wynik = await push()
+  if (wynik) flash(`Zapisano do arkusza ✓ ${wynik.kartki} kartek`)
 }
 
 async function onPull() {
   confirmPull.value = false
   const wynik = await pull()
-  if (wynik) flash(`Pobrano ${wynik.kartki} kartek z arkusza ✓`)
+  if (wynik) flash(`Wczytano z arkusza ✓ ${wynik.kartki} kartek`)
 }
 
 function onDisconnect() {
   disconnect()
   urlInput.value = ''
   tokenInput.value = ''
-  remote.value = null
   flash('Rozłączono — dane zostają w telefonie')
 }
 
@@ -91,8 +56,7 @@ function flash(text) {
 
     <template v-if="!sync.connected">
       <p class="card__note">
-        Arkusz staje się bazą danych: po każdej zmianie aplikacja sama go nadpisuje.
-        W drugą stronę dane idą <strong>tylko na Twoje kliknięcie</strong>.
+        Podaj adres skryptu i hasło, żeby zapisywać dane do arkusza.
       </p>
       <label class="sync__field">
         <span>Adres skryptu (kończy się na /exec)</span>
@@ -102,78 +66,30 @@ function flash(text) {
         <span>Hasło ze skryptu (TOKEN)</span>
         <input v-model="tokenInput" type="text" placeholder="to samo, co w Kod.gs" />
       </label>
-      <button class="btn btn--primary sync__connect" type="button" :disabled="!canConnect || !!sync.busy" @click="onConnect">
+      <button class="btn btn--primary sync__wide" type="button" :disabled="!canConnect || !!sync.busy" @click="onConnect">
         Połącz z arkuszem
       </button>
     </template>
 
     <template v-else>
-      <div class="sync__status" :class="{ 'is-error': !!sync.error, 'is-pending': (sync.pending || firstRun) && !sync.error }">
-        <span class="sync__dot"></span>
-        {{ statusText }}
-      </div>
+      <p class="card__note">
+        Nic nie dzieje się samo. Zapis i odczyt tylko po naciśnięciu przycisku.
+      </p>
 
-      <p v-if="sync.error" class="sync__error">{{ sync.error }}</p>
-
-      <!-- Pierwsza synchronizacja: nic nie dzieje się samo, kierunek wybiera użytkownik -->
-      <div v-if="firstRun" class="sync__first">
-        <p class="sync__first-info">
-          <template v-if="remote?.kartek">
-            W arkuszu są już dane — <strong>{{ remote.kartek }} kartek</strong>. Zdecyduj, która wersja jest ważniejsza.
-          </template>
-          <template v-else-if="remote"> Arkusz jest pusty. Wyślij do niego to, co masz w telefonie. </template>
-          <template v-else> Wybierz, w którą stronę mają pójść dane. </template>
-        </p>
-        <div class="card__actions">
-          <button class="btn btn--primary" type="button" :disabled="!!sync.busy" @click="askPush">
-            Wyślij moje dane
-          </button>
-          <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="askPull">
-            Pobierz z arkusza
-          </button>
-        </div>
-      </div>
-
-      <!-- Przy konfiguracji z Vercela nie ma czego klikać: wysyłka i pobieranie
-           dzieją się same. Przycisk pokazujemy tylko, gdy coś nie zadziałało. -->
-      <button
-        v-else-if="sync.auto"
-        v-show="sync.error || sync.pending"
-        class="btn btn--ghost sync__retry"
-        type="button"
-        :disabled="!!sync.busy"
-        @click="onPush"
-      >
-        Spróbuj wysłać ponownie
+      <button class="btn btn--primary sync__wide sync__save" type="button" :disabled="!!sync.busy" @click="onPush">
+        {{ sync.busy === 'push' ? 'Zapisuję…' : 'Zapisz do Google Sheets' }}
       </button>
 
-      <div v-else class="card__actions">
-        <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="onPush">Wyślij teraz</button>
-        <button class="btn btn--ghost" type="button" :disabled="!!sync.busy" @click="askPull">
-          Pobierz z arkusza
-        </button>
-      </div>
+      <button class="btn btn--ghost sync__wide" type="button" :disabled="!!sync.busy" @click="confirmPull = true">
+        {{ sync.busy === 'pull' ? 'Wczytuję…' : 'Wczytaj z Google Sheets' }}
+      </button>
 
       <Transition name="pop">
-        <div v-if="confirmPush" class="sync__confirm sync__confirm--push">
-          <strong>Nadpisać arkusz?</strong>
+        <div v-if="confirmPull" class="sync__confirm">
+          <strong>Wczytać dane z arkusza?</strong>
           <span>
-            W arkuszu jest {{ remote?.kartek }} kartek — zostaną <u>zastąpione</u> tym, co masz w tym telefonie.
-            Jeśli to praca kogoś innego, najpierw ją pobierz.
-          </span>
-          <div class="sync__confirm-row">
-            <button class="btn btn--ghost" type="button" @click="confirmPush = false">Anuluj</button>
-            <button class="btn btn--danger" type="button" @click="onPush">Tak, nadpisz</button>
-          </div>
-        </div>
-      </Transition>
-
-      <Transition name="pop">
-        <div v-if="confirmPull" class="sync__confirm sync__confirm--pull">
-          <strong>Pobrać dane z arkusza?</strong>
-          <span>
-            To <u>zastąpi wszystko</u>, co jest teraz w tym telefonie — wszystkie kartki, kwoty i notatki.
-            Zmian z telefonu nie da się potem odzyskać.
+            To <u>zastąpi wszystko</u>, co jest teraz w tym telefonie — kartki, kwoty, notatki i kolejność.
+            Jeśli masz tu coś nowego, najpierw zapisz.
           </span>
           <div class="sync__confirm-row">
             <button class="btn btn--ghost" type="button" @click="confirmPull = false">Anuluj</button>
@@ -182,10 +98,16 @@ function flash(text) {
         </div>
       </Transition>
 
-      <p v-if="sync.auto" class="sync__auto">
-        Zmiany zapisują się do arkusza same, a zmiany drugiej osoby pojawiają się tu w kilkanaście sekund.
-        Nie trzeba nic klikać.
+      <p v-if="sync.error" class="sync__error">{{ sync.error }}</p>
+
+      <p v-else-if="sync.unsaved" class="sync__hint is-warn">
+        Masz zmiany, których nie ma jeszcze w arkuszu.
       </p>
+
+      <dl class="sync__log">
+        <div><dt>Ostatni zapis</dt><dd>{{ ostatnioZapisano || '—' }}</dd></div>
+        <div><dt>Ostatni odczyt</dt><dd>{{ ostatnioWczytano || '—' }}</dd></div>
+      </dl>
 
       <button v-if="!sync.auto" class="sync__off" type="button" @click="onDisconnect">Rozłącz arkusz</button>
     </template>
@@ -231,59 +153,68 @@ function flash(text) {
   box-shadow: 0 0 0 3px rgba(240, 201, 194, 0.4);
 }
 
-.sync__connect {
+.sync__wide {
   width: 100%;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
-.sync__connect:disabled {
-  opacity: 0.5;
+.sync__wide:disabled {
+  opacity: 0.55;
 }
 
-.sync__status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #6f8a68;
-}
-
-.sync__status.is-pending {
-  color: var(--gold);
-}
-
-.sync__status.is-error {
-  color: var(--danger);
-}
-
-.sync__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
+.sync__save {
+  min-height: 52px;
+  font-size: 16px;
 }
 
 .sync__error {
-  margin: 8px 0 0;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(180, 84, 75, 0.08);
   font-size: 12.5px;
   line-height: 1.45;
   color: var(--danger);
 }
 
-.sync__first {
-  margin-top: 10px;
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  background: rgba(200, 162, 74, 0.09);
-  border: 1px solid var(--gold-soft);
+.sync__hint {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: center;
 }
 
-.sync__first-info {
-  margin: 0 0 12px;
+.sync__hint.is-warn {
+  color: var(--gold);
+}
+
+.sync__log {
+  display: flex;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.sync__log > div {
+  flex: 1;
+  text-align: center;
+  padding: 8px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--paper-edge);
+}
+
+.sync__log dt {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.sync__log dd {
+  margin: 3px 0 0;
   font-size: 12.5px;
-  line-height: 1.5;
+  font-weight: 600;
   color: var(--ink-soft);
 }
 
@@ -317,18 +248,6 @@ function flash(text) {
 
 .sync__confirm-row .btn {
   flex: 1;
-}
-
-.sync__retry {
-  width: 100%;
-  margin-top: 12px;
-}
-
-.sync__auto {
-  margin: 12px 0 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--ink-faint);
 }
 
 .sync__off {
