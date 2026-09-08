@@ -3,6 +3,7 @@ import { computed, nextTick, ref } from 'vue'
 import BookView from './components/BookView.vue'
 import SummaryView from './components/SummaryView.vue'
 import PageIndexSheet from './components/PageIndexSheet.vue'
+import Countdown from './components/Countdown.vue'
 import { addVendor, state, summary } from './lib/store.js'
 import { formatPLN } from './lib/money.js'
 import { updating } from './lib/updater.js'
@@ -33,7 +34,7 @@ function jumpTo(i) {
 
       <div class="top__brand">
         <span class="top__mono">I <em>&amp;</em> M</span>
-        <span class="top__sub">planer ślubny</span>
+        <Countdown />
       </div>
 
       <button class="top__sum" type="button" @click="showSummary = true">
