@@ -119,7 +119,7 @@ function onDelete() {
         </template>
       </section>
 
-      <div v-if="totals.total > 0" class="vpage__balance">
+      <div v-if="totals.total > 0" class="vpage__balance" :class="{ 'is-oplacone': totals.oplaconeStatusem }">
         <div class="vpage__balance-row">
           <div class="vpage__balance-item">
             <span>Zapłacone</span>
@@ -131,6 +131,10 @@ function onDelete() {
             <strong>{{ formatPLN(totals.left) }}</strong>
           </div>
         </div>
+
+        <p v-if="totals.oplaconeStatusem" class="vpage__balance-note is-oplacone">
+          ✓ Status „Opłacone w całości" — liczone jako zapłacone w 100%
+        </p>
 
         <p class="vpage__balance-note">
           Razem <strong>{{ formatPLN(totals.total) }}</strong>
@@ -341,6 +345,24 @@ function onDelete() {
   width: 1px;
   margin: 2px 10px;
   background: var(--blush-soft);
+}
+
+.vpage__balance.is-oplacone {
+  background: linear-gradient(135deg, var(--sage-wash) 0%, #f6faf4 100%);
+  border-color: #c3d2bd;
+}
+
+.vpage__balance.is-oplacone .vpage__balance-item span {
+  color: #6f8a68;
+}
+
+.vpage__balance.is-oplacone .vpage__balance-sep {
+  background: #c3d2bd;
+}
+
+.vpage__balance-note.is-oplacone {
+  font-weight: 700;
+  color: #5f7159;
 }
 
 .vpage__balance-note {

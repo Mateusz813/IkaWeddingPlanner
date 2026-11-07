@@ -39,13 +39,16 @@ export const DEFAULT_KEYS = [
   'notes',
 ]
 
+/** Status, który oznacza „zapłacone w 100%" — używany też przy liczeniu kosztów. */
+export const STATUS_OPLACONE = 'Opłacone w całości'
+
 export const STATUS_OPTIONS = [
   'Do ustalenia',
   'Szukam / porównuję',
   'Po rozmowie',
   'Zarezerwowane',
   'Zaliczka wpłacona',
-  'Opłacone w całości',
+  STATUS_OPLACONE,
   'Odpada',
 ]
 
@@ -498,7 +501,11 @@ export function vendorTotals(vendor) {
   const stated = parseMoney(value(vendor, 'total'))
   const base = stated || deposit + planned
   const total = base + extra
-  const paid = deposit + paidInstallments
+
+  // Status „Opłacone w całości" jest deklaracją użytkownika i ma pierwszeństwo:
+  // liczymy wtedy całą kwotę jako zapłaconą, nawet jeśli nie rozpisał transz.
+  const oplaconeStatusem = value(vendor, 'status') === STATUS_OPLACONE
+  const paid = oplaconeStatusem ? total : deposit + paidInstallments
 
   return {
     total,
@@ -508,6 +515,7 @@ export function vendorTotals(vendor) {
     planned,
     paidInstallments,
     paid,
+    oplaconeStatusem,
     extra,
     extraCount,
     left: Math.max(0, total - paid),
